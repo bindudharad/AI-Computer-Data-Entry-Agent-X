@@ -13,7 +13,10 @@ working on vision-only data.
 from __future__ import annotations
 
 import json
+<<<<<<< HEAD
 import re
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -93,6 +96,7 @@ TEXT_CONTROL_TYPES = {"Text", "Static", "Document"}
 #: tree / grid containers) so a read-back never grabs popup list items.
 _VALUE_CONTROL_TYPES = {"Edit", "ComboBox", "Calendar", "Spinner"}
 
+<<<<<<< HEAD
 #: UIA control types that are the drop-down popup of a combobox / listbox.
 #: These host the ``SelectionItemPattern`` that lets the agent select an option
 #: DIRECTLY - no focus click, no arrow keys, no Enter, no dropdown animation
@@ -113,6 +117,8 @@ _OPTION_CACHE_TTL = 3.0
 #: UIA pattern names probed when resolving a direct selection target.
 _SELECTION_PATTERNS = ("SelectionItem", "Selection", "ExpandCollapse")
 
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 #: UIA framework ids whose ComboBox ``name`` is the ADJACENT FIELD LABEL
 #: ("Rashi", "Gender", ...) rather than the selected item, so the name can
 #: never be trusted as a selected-item fallback for read-back verification.
@@ -466,7 +472,10 @@ class UiaBackend:
         self._desktop = None
         self._window = None
         self._scroll_container_cache: dict[tuple[int, tuple[int, int, int, int] | None], tuple[float, list[ScrollContainer]]] = {}
+<<<<<<< HEAD
         self._option_cache: dict[tuple[int, tuple[int, int, int, int]], tuple[float, list[str]]] = {}
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         try:
             from pywinauto import Desktop
             from pywinauto.controls.uiawrapper import UIAElementInfo
@@ -1051,6 +1060,7 @@ class UiaBackend:
             logger.debug("set_control_value failed: {}", exc)
             return False
 
+<<<<<<< HEAD
     # -- direct selection (SelectionItem / ExpandCollapse) ---------------------
 
     @staticmethod
@@ -1309,6 +1319,8 @@ class UiaBackend:
             except Exception:
                 pass
 
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     def buttons(self, handle: int, nodes: list[UiaNode] | None = None) -> list[UiaNode]:
         """Button-like controls under ``handle``."""
         if nodes is None:

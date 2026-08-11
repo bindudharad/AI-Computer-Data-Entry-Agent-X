@@ -29,7 +29,10 @@ CATEGORIES: dict[str, str] = {
     "timing": "timings",
     "focus": "focus",
     "verification": "verification",
+<<<<<<< HEAD
     "watchdog": "watchdog",
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 }
 
 #: Bound loggers for the domain categories.
@@ -39,7 +42,10 @@ uia_logger = logger.bind(category="uia")
 timing_logger = logger.bind(category="timing")
 focus_logger = logger.bind(category="focus")
 verification_logger = logger.bind(category="verification")
+<<<<<<< HEAD
 watchdog_logger = logger.bind(category="watchdog")
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
 
 def _category_filter(category: str) -> Any:

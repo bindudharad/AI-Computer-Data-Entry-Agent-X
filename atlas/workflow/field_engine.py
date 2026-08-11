@@ -27,7 +27,10 @@ This module is pure logic (duck-typed UIA nodes) so it is fully unit-testable.
 
 from __future__ import annotations
 
+<<<<<<< HEAD
 import enum
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 import re
 import time
 from collections.abc import Callable
@@ -59,6 +62,7 @@ DEFAULT_SCROLL_ATTEMPTS = 6
 DEFAULT_FIELD_RETRIES = 1
 
 
+<<<<<<< HEAD
 class FieldStatus(str, enum.Enum):
     """Explicit lifecycle status for one queued field.
 
@@ -115,6 +119,8 @@ def classify_fill_status(results: list[Any]) -> FieldStatus:
     return FieldStatus.VERIFIED if verified else FieldStatus.FILLED
 
 
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 def _clean_label(text: str) -> str:
     return re.sub(r"[:：\s]+$", "", (text or "")).strip()
 
@@ -208,6 +214,7 @@ def _index_nodes(nodes: list[Any]) -> list[tuple[tuple, Any]]:
     return out
 
 
+<<<<<<< HEAD
 def field_coverage_summary(queue: Any) -> dict:
     """Target-based inventory ledger: every form control is accounted for.
 
@@ -237,6 +244,8 @@ def field_coverage_summary(queue: Any) -> dict:
     }
 
 
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 @dataclass
 class FieldTarget:
     """One fillable form control plus the source value bound to it."""
@@ -248,8 +257,11 @@ class FieldTarget:
     done: bool = False
     failed: bool = False
     _match_key: tuple = field(default=(), repr=False)
+<<<<<<< HEAD
     status: FieldStatus = FieldStatus.PENDING
     status_reason: str = ""
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
     @property
     def stable_id(self) -> str:
@@ -279,6 +291,7 @@ class FieldTarget:
     def enabled(self) -> bool:
         return bool(getattr(self.node, "enabled", True))
 
+<<<<<<< HEAD
     @property
     def source_backed(self) -> bool:
         """True when a source value is bound to this field."""
@@ -309,6 +322,8 @@ class FieldTarget:
     def placeholder(self) -> str:
         return (getattr(self.node, "placeholder", None) or "").strip()
 
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
 @dataclass
 class DateGroupTarget:
@@ -321,8 +336,11 @@ class DateGroupTarget:
     #: The source value the whole group was filled from (e.g. ``1996-02-02``),
     #: used by the whole-group post-fill verification.
     date_value: str = ""
+<<<<<<< HEAD
     status: FieldStatus = FieldStatus.PENDING
     status_reason: str = ""
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
     @property
     def stable_id(self) -> str:
@@ -340,10 +358,13 @@ class DateGroupTarget:
         return ""
 
     @property
+<<<<<<< HEAD
     def source_backed(self) -> bool:
         return any(t.source_backed for t in self.targets)
 
     @property
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     def bbox(self) -> BBox | None:
         """The union box spanning all three part controls.
 
@@ -501,6 +522,7 @@ def _merge_date_groups(targets: list[FieldTarget], date_value: str | None = None
 
 
 class PendingFieldQueue:
+<<<<<<< HEAD
     """Ordered queue of fields to fill for one record.
 
     Every target carries an explicit :class:`FieldStatus`. A target is never
@@ -520,6 +542,12 @@ class PendingFieldQueue:
         #: Source record + mappings used to bind values to late-joining fields.
         self.record = record
         self.mappings = list(mappings or [])
+=======
+    """Ordered queue of fields to fill for one record."""
+
+    def __init__(self, items: list[Any]) -> None:
+        self.items: list[Any] = list(items)
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
     @property
     def remaining(self) -> int:
@@ -543,6 +571,7 @@ class PendingFieldQueue:
                 return it
         return None
 
+<<<<<<< HEAD
     def mark_status(self, target: Any, status: FieldStatus, reason: str = "") -> None:
         """Set a target's explicit status, keeping ``done``/``failed`` in sync."""
         target.status = FieldStatus(status)
@@ -569,6 +598,13 @@ class PendingFieldQueue:
         self.mark_status(target, status, reason)
         if target not in self.skipped_items:
             self.skipped_items.append(target)
+=======
+    def mark_done(self, target: Any) -> None:
+        target.done = True
+
+    def mark_failed(self, target: Any, reason: str = "") -> None:
+        target.failed = True
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
     def submit_ready(self) -> bool:
         return self.remaining == 0
@@ -576,6 +612,7 @@ class PendingFieldQueue:
     def all_ok(self) -> bool:
         return self.remaining == 0 and self.failed == 0
 
+<<<<<<< HEAD
     def blockers(self) -> list[Any]:
         """Source-backed targets that are NOT safely filled (never submit partial).
 
@@ -616,6 +653,8 @@ class PendingFieldQueue:
                 return False, i
         return True, -1
 
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     def refresh_positions(self, fresh_nodes: list[Any]) -> int:
         """Re-match pending targets against a fresh UIA snapshot by stable key.
 
@@ -632,6 +671,7 @@ class PendingFieldQueue:
                     updated += 1
         return updated
 
+<<<<<<< HEAD
     def merge_fields(
         self,
         fresh_nodes: list[Any],
@@ -680,6 +720,8 @@ class PendingFieldQueue:
             added += 1
         return added
 
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     def bbox_for_id(self, field_id: str | None) -> BBox | None:
         """Live bbox for an action's ``field_id`` (stable id) from the queue.
 
@@ -723,9 +765,13 @@ def build_field_queue(field_map: Any, record: Any, mappings: list[dict[str, str]
     # Resolve the record's date-like value so unlabelled Day/Month/Year combos
     # can be detected and filled even without a label or mapping.
     date_value = _find_date_value(pairs)
+<<<<<<< HEAD
     merged = _merge_date_groups(targets, date_value)
     queue_mappings = list(mappings) if mappings is not None else list(getattr(field_map, "mappings", None) or [])
     return PendingFieldQueue(merged, record=record, mappings=queue_mappings)
+=======
+    return PendingFieldQueue(_merge_date_groups(targets, date_value))
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
 
 class ScrollCapabilityCache:
@@ -1047,8 +1093,11 @@ __all__ = [
     "FieldTarget",
     "DateGroupTarget",
     "PendingFieldQueue",
+<<<<<<< HEAD
     "FieldStatus",
     "classify_fill_status",
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     "ScrollCapabilityCache",
     "TargetNavigator",
     "ScrollProgress",

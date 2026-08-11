@@ -10,8 +10,11 @@ from atlas.observe.uia import ScrollContainer, UiaNode
 from atlas.vision.models import BBox, ElementType
 from atlas.workflow.field_engine import (
     DateGroupTarget,
+<<<<<<< HEAD
     FieldStatus,
     FieldTarget,
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     PendingFieldQueue,
     PerfTracker,
     ProgressGuard,
@@ -21,8 +24,11 @@ from atlas.workflow.field_engine import (
     _find_date_value,
     build_field_actions,
     build_field_queue,
+<<<<<<< HEAD
     classify_fill_status,
     field_coverage_summary,
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     split_date_parts,
 )
 from atlas.workflow.scroll import PANEL_LEFT, PANEL_RIGHT
@@ -268,6 +274,7 @@ def test_refresh_positions_updates_bbox_by_stable_key() -> None:
     assert target.stable_id == "h:7"
 
 
+<<<<<<< HEAD
 def test_queue_keeps_value_less_fields_with_explicit_status() -> None:
     fields = [
         _node("Full Name", "Edit", 300, 100),
@@ -355,6 +362,8 @@ def test_mark_status_keeps_done_failed_in_sync() -> None:
     assert queue.all_ok()
 
 
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 # -- build_field_actions -----------------------------------------------------
 
 
@@ -551,6 +560,7 @@ def test_pick_containers_rejects_full_client_wrapper() -> None:
     )
     chosen = pick_left_right_containers([wrapper], client_rect=(0, 0, 1024, 768))
     assert wrapper not in chosen.values()
+<<<<<<< HEAD
 
 
 # -- canonical TargetField model ------------------------------------------------
@@ -606,3 +616,5 @@ def test_field_coverage_summary_keeps_status_on_unmapped() -> None:
     entry = cov["unmapped"][0]
     assert entry["label"] == "State"
     assert entry["reason"] == "no source pair for State"
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca

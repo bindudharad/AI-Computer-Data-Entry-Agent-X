@@ -574,11 +574,15 @@ class Assistant:
                     backend=backend,
                     declared_fields=self._declared_fields(),
                 )
+<<<<<<< HEAD
                 # Light refresh: re-read the editable fields / buttons / text
                 # labels from ONE flat walk but skip the (expensive, redundant)
                 # scroll-container traversal - the loop's scroll session is
                 # discovered once by the scroller provider and cached.
                 refreshed = builder.build(handle, None, light=True)
+=======
+                refreshed = builder.build(handle, None)
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
                 if refreshed.has_form:
                     return refreshed
             except Exception as exc:
@@ -1005,6 +1009,7 @@ class Assistant:
                 logger.debug("uia set value failed: {}", exc)
                 return False
 
+<<<<<<< HEAD
         def _select_option(bbox: BBox, value: str, options: list[str] | None, field_id: str | None) -> bool:
             info = self._target.info if self._target is not None else None
             if info is None or info.handle is None:
@@ -1017,6 +1022,8 @@ class Assistant:
                 logger.debug("uia select option failed: {}", exc)
                 return False
 
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         return ControlEngine(
             mouse=self._mouse,
             keyboard=self._keyboard,
@@ -1024,7 +1031,10 @@ class Assistant:
             clipboard_use_long=self._config.typing.use_clipboard_for_long,
             clipboard_min_length=self._config.typing.clipboard_min_length,
             value_setter=_set_value,
+<<<<<<< HEAD
             option_setter=_select_option,
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         )
 
     def _desktop_verifier(self) -> CompositeVerifier:

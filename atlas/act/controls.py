@@ -22,10 +22,13 @@ from atlas.vision.models import BBox
 
 ValueSetter = Callable[[BBox, str], bool]
 
+<<<<<<< HEAD
 #: Direct UIA dropdown selection: (bbox, value, declared_options, field_id) -> bool.
 #: Returns True when the option was selected without keyboard interaction.
 OptionSetter = Callable[[BBox, str, list[str] | None, str | None], bool]
 
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
 @dataclass
 class ControlOutcome:
@@ -110,7 +113,10 @@ class ControlEngine(ControlInterface):
         clipboard_use_long: bool = True,
         clipboard_min_length: int = 25,
         value_setter: ValueSetter | None = None,
+<<<<<<< HEAD
         option_setter: OptionSetter | None = None,
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     ) -> None:
         self._mouse = mouse
         self._keyboard = keyboard
@@ -118,7 +124,10 @@ class ControlEngine(ControlInterface):
         self._clipboard_long = clipboard_use_long
         self._clipboard_min = clipboard_min_length
         self._value_setter = value_setter
+<<<<<<< HEAD
         self._option_setter = option_setter
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
     def focus(self, bbox: BBox | None, field_id: str | None = None) -> ControlOutcome:
         if bbox is None:
@@ -163,6 +172,7 @@ class ControlEngine(ControlInterface):
             # Empty selection: typing nothing + Enter on an open native
             # dropdown just hangs (or mis-selects). Skip cleanly instead.
             return ControlOutcome(ok=True, evidence=f"select skipped (empty value) for {field_id!r}")
+<<<<<<< HEAD
         # Phase 4: try a direct UIA selection first (SelectionItemPattern /
         # ExpandCollapse / cached option list). Success = no focus click, no
         # dropdown animation wait, no arrow/Enter keystrokes.
@@ -172,6 +182,8 @@ class ControlEngine(ControlInterface):
                     return ControlOutcome(ok=True, evidence=f"selected {value_str!r} via UIA direct")
             except Exception as exc:
                 logger.debug("uia direct select failed: {}", exc)
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         if options:
             idx = self._find_option_index(options, value_str)
             if idx is not None:

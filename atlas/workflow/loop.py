@@ -29,7 +29,11 @@ from typing import Any
 from atlas.act.executor import ActionExecutor
 from atlas.act.models import Action, ActionResult, ActionType
 from atlas.core.events import EventType, get_event_bus
+<<<<<<< HEAD
 from atlas.core.logging import log_screenshot, logger, watchdog_logger
+=======
+from atlas.core.logging import log_screenshot, logger
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 from atlas.core.metrics import Timer
 from atlas.core.record_builder import RecordBuilder, RecordBuildResult
 from atlas.core.states import AgentState, StateMachine
@@ -49,7 +53,10 @@ from atlas.workflow.field_engine import (
     DEFAULT_FIELD_TIMEOUT,
     DEFAULT_SCROLL_ATTEMPTS,
     DateGroupTarget,
+<<<<<<< HEAD
     FieldStatus,
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     PendingFieldQueue,
     PerfTracker,
     ProgressGuard,
@@ -58,8 +65,11 @@ from atlas.workflow.field_engine import (
     TargetNavigator,
     build_field_actions,
     build_field_queue,
+<<<<<<< HEAD
     classify_fill_status,
     field_coverage_summary,
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     make_scroll_fn,
 )
 from atlas.workflow.scroll import PANEL_LEFT, PANEL_RIGHT, DualPanelScroll
@@ -303,12 +313,15 @@ class AgentLoop:
         self._last_layout = ""
         self._state_entered: dict[AgentState, float] = {}
         self._state_warned: set[AgentState] = set()
+<<<<<<< HEAD
         #: Consecutive overrun ticks per state so the level-2 watchdog
         #: escalates instead of logging once and going silent while the loop
         #: keeps spinning inside the same stuck state. Reset on `_set`.
         self._state_overruns: dict[AgentState, int] = {}
         self._last_overrun_log: dict[AgentState, float] = {}
         self._overrun_repeat_log_seconds: float = 30.0
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         self._bus = get_event_bus()
         self._cached_analysis: SceneAnalysis | None = None
         self._last_signature = ""
@@ -399,7 +412,10 @@ class AgentLoop:
             self._dump_timeline(summary)
             self._dump_failure(summary)
             self._dump_focus_history()
+<<<<<<< HEAD
             self._dump_watchdog()
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
             self._dump_verification_debug(summary)
             self._dump_run_metrics(summary)
         return summary
@@ -550,6 +566,7 @@ class AgentLoop:
             if not queue.items:
                 logger.warning("field-driven path found no fillable fields; falling back to viewport path")
                 return self._run_record(analysis, record, index)
+<<<<<<< HEAD
             order_ok, bad_at = queue.validate_order()
             if not order_ok:
                 logger.warning(
@@ -589,12 +606,24 @@ class AgentLoop:
             submit_ok: bool | None = None
             blockers = queue.blockers()
             if not blockers and queue.failed == 0 and self._field_map is not None:
+=======
+
+            perf = PerfTracker()
+            key = record.record_key or ""
+            self._snapshot("before-fill", index, key)
+            results = self._fill_from_queue(queue, index, perf)
+            self._snapshot("after-fill", index, key)
+
+            submit_ok: bool | None = None
+            if queue.all_ok() and self._field_map is not None:
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
                 perf.start("submit")
                 submit = self._submit_field_driven(record, index)
                 perf.stop("submit")
                 if submit is not None:
                     results.append(submit)
                     submit_ok = submit.ok
+<<<<<<< HEAD
             elif blockers:
                 logger.warning(
                     "record {}: submit BLOCKED - {} source-backed field(s) not safely filled",
@@ -607,6 +636,14 @@ class AgentLoop:
             self._write_field_perf(perf, queue, index, record, timings)
 
         success = bool(not queue.blockers() and queue.failed == 0 and submit_ok is not False)
+=======
+            elif queue.failed:
+                logger.warning("record {}: {} field(s) failed; submit skipped", index, queue.failed)
+
+            self._write_field_perf(perf, queue, index, record)
+
+        success = bool(queue.all_ok() and submit_ok is not False)
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         result = RecordResult(
             index=index,
             record=record,
@@ -617,6 +654,7 @@ class AgentLoop:
         )
         result.skipped_fields = self._skipped_fields(results)
         result.unverified_fields = self._unverified_fields(results)
+<<<<<<< HEAD
         parts = []
         blockers = queue.blockers()
         if blockers:
@@ -631,11 +669,23 @@ class AgentLoop:
             result.message = f"{result.message}; {suffix}" if result.message else suffix
         logger.info(
             "record {} ({}) -> {} in {:.1f}s (field-driven) | statuses={}",
+=======
+        if result.skipped_fields or queue.failed:
+            result.message = f"{queue.failed} field(s) failed, {len(result.skipped_fields)} skipped"
+        if result.unverified_fields:
+            suffix = f"; {len(result.unverified_fields)} field(s) written but NOT verified (UNKNOWN)"
+            result.message = f"{result.message}{suffix}" if result.message else suffix[2:]
+        logger.info(
+            "record {} ({}) -> {} in {:.1f}s (field-driven)",
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
             index,
             record.record_key or "?",
             "OK" if success else "FAILED",
             result.duration_ms / 1000.0,
+<<<<<<< HEAD
             queue.status_summary(),
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         )
         return result
 
@@ -710,6 +760,7 @@ class AgentLoop:
             return client_rect
         return (v_left, v_top, v_right, v_bottom)
 
+<<<<<<< HEAD
     def _fill_from_queue(
         self,
         queue: PendingFieldQueue,
@@ -725,6 +776,10 @@ class AgentLoop:
         and every fill finishes with an explicit status (VERIFIED / FILLED /
         ALREADY_CORRECT / FAILED / RETRY_PENDING).
         """
+=======
+    def _fill_from_queue(self, queue: PendingFieldQueue, index: int, perf: PerfTracker) -> list[ActionResult]:
+        """Walk the queue: fill visible targets, scroll RIGHT to reach below-fold ones."""
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         results: list[ActionResult] = []
         self._active_queue = queue
         client_rect = self._client_rect()
@@ -734,11 +789,15 @@ class AgentLoop:
         session = self._field_scroll_session()
         viewport = self._field_fill_viewport(session, client_rect)
         scrolled: dict[str, int] = {}
+<<<<<<< HEAD
         total = len(queue.items)
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         while not self._stop and queue.next_pending() is not None:
             self._check_state_budget()
             target = queue.next_pending()
             guard.begin()
+<<<<<<< HEAD
             label = target.label or target.stable_id
             if not target.source_backed:
                 self._mark_skipped(
@@ -756,10 +815,15 @@ class AgentLoop:
                         EventType.ACTION_STARTED,
                         {"type": "FILL", "field_id": target.stable_id, "label": target.label},
                     )
+=======
+            if navigator.fillable(target, viewport):
+                if self._wait_target_enabled(queue, target, guard, navigator, viewport):
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
                     perf.start("fill")
                     ok, action_results = self._fill_target(target, index)
                     perf.stop("fill")
                     results.extend(action_results)
+<<<<<<< HEAD
                     elapsed = time.time() - t0
                     self._warn_field_latency(target, elapsed)
                     if ok:
@@ -771,10 +835,15 @@ class AgentLoop:
                             done_now, total, label[:24], elapsed, status.value,
                         )
                         self._record_timing(timings, target, status, elapsed)
+=======
+                    if ok:
+                        queue.mark_done(target)
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
                         continue
                     target.retries += 1
                     if target.retries > self._field_retries:
                         self._mark_failed(queue, target, results, "fill failed")
+<<<<<<< HEAD
                         self._record_timing(timings, target, FieldStatus.FAILED, elapsed)
                         continue
                     queue.mark_status(target, FieldStatus.RETRY_PENDING, "fill failed once - retrying")
@@ -783,16 +852,30 @@ class AgentLoop:
                     continue
                 self._mark_failed(queue, target, results, "dependent field never enabled")
                 self._record_timing(timings, target, FieldStatus.FAILED, 0.0)
+=======
+                        continue
+                    self._refresh_field_map_once()
+                    if self._field_map is not None:
+                        queue.refresh_positions(self._field_map.right_fields)
+                    continue
+                self._mark_failed(queue, target, results, "dependent field never enabled")
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
                 continue
             # Below the fold: scroll the RIGHT panel toward the target.
             if not self._field_driven_scroll:
                 self._mark_failed(queue, target, results, "target below fold and scroll disabled")
+<<<<<<< HEAD
                 self._record_timing(timings, target, FieldStatus.FAILED, 0.0)
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
                 continue
             tries = scrolled.get(target.stable_id, 0)
             if tries >= self._field_scroll_attempts:
                 self._mark_failed(queue, target, results, "target below fold after repeated scrolling")
+<<<<<<< HEAD
                 self._record_timing(timings, target, FieldStatus.FAILED, 0.0)
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
                 continue
             perf.start("scroll")
             moved = self._scroll_to_target(queue, target, viewport, session, cache, navigator, guard)
@@ -800,6 +883,7 @@ class AgentLoop:
             scrolled[target.stable_id] = tries + 1
             if not moved and not navigator.fillable(target, viewport):
                 self._mark_failed(queue, target, results, "could not scroll target into view")
+<<<<<<< HEAD
                 self._record_timing(timings, target, FieldStatus.FAILED, 0.0)
                 continue
         return results
@@ -841,6 +925,11 @@ class AgentLoop:
         if added:
             logger.info("field queue grew by {} field(s) after refresh", added)
 
+=======
+                continue
+        return results
+
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     def _wait_target_enabled(
         self,
         queue: PendingFieldQueue,
@@ -872,12 +961,17 @@ class AgentLoop:
         # stalling the record.
         deadline = time.time() + min(5.0, self._field_timeout)
         while not self._stop and not guard.expired and time.time() < deadline:
+<<<<<<< HEAD
             # NOTE: no early-return when the target scrolls away mid-wait. The
             # fill loop never scrolls during this wait, so a target that
             # entered fillable stays fillable; returning True on a non-fillable
             # target used to let a STILL-DISABLED field be marked done with no
             # actions (a silent skip of the very dependent combos this wait
             # exists to protect).
+=======
+            if not navigator.fillable(target, viewport):
+                return True  # scrolled away; handled by the scroll branch
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
             time.sleep(intervals[idx])
             idx = min(idx + 1, len(intervals) - 1)
             self._refresh_field_map_once()
@@ -940,7 +1034,10 @@ class AgentLoop:
             self._refresh_field_map_once()
             if self._field_map is not None:
                 queue.refresh_positions(self._field_map.right_fields)
+<<<<<<< HEAD
                 queue.merge_fields(self._field_map.right_fields)
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
             if navigator.fillable(target, viewport) or before.moved(container, target):
                 return True
             before = ScrollProgress.capture(container, target)
@@ -969,7 +1066,10 @@ class AgentLoop:
             self._refresh_field_map_once()
             if self._field_map is not None:
                 queue.refresh_positions(self._field_map.right_fields)
+<<<<<<< HEAD
                 queue.merge_fields(self._field_map.right_fields)
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
             if navigator.fillable(target, viewport):
                 return True
         return navigator.fillable(target, viewport)
@@ -1043,6 +1143,7 @@ class AgentLoop:
             message=reason,
         ))
 
+<<<<<<< HEAD
     def _mark_skipped(
         self,
         queue: PendingFieldQueue,
@@ -1072,6 +1173,8 @@ class AgentLoop:
             message=reason,
         ))
 
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     def _submit_field_driven(self, record: SourceRecord, index: int) -> ActionResult | None:
         """Click the upload button once, then verify with a single VLM observe."""
         field_map = self._field_map
@@ -1126,6 +1229,7 @@ class AgentLoop:
             return True
         return not any(token in text for token in ("error", "failed", "validation error", "invalid", "cannot be blank"))
 
+<<<<<<< HEAD
     def _write_field_perf(
         self, perf: PerfTracker, queue: PendingFieldQueue, index: int, record: SourceRecord,
         timings: list[dict] | None = None,
@@ -1141,19 +1245,26 @@ class AgentLoop:
             len(queue.skipped_items),
             queue.failed,
         )
+=======
+    def _write_field_perf(self, perf: PerfTracker, queue: PendingFieldQueue, index: int, record: SourceRecord) -> None:
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         if self._debug_dir is None:
             return
         self._write_debug("field_driven_perf.json", {
             "record_index": index,
             "key": record.record_key,
             "phases": perf.to_dict(),
+<<<<<<< HEAD
             "coverage": coverage,
             "timings": timings or [],
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
             "queue": {
                 "total": len(queue.items),
                 "done": queue.done,
                 "failed": queue.failed,
                 "remaining": queue.remaining,
+<<<<<<< HEAD
                 "skipped": len(queue.skipped_items),
                 "statuses": queue.status_summary(),
                 "blockers": [
@@ -1164,6 +1275,8 @@ class AgentLoop:
                     }
                     for it in queue.blockers()
                 ],
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
             },
         })
 
@@ -2249,6 +2362,7 @@ class AgentLoop:
         except Exception as exc:
             logger.debug("focus_history write failed: {}", exc)
 
+<<<<<<< HEAD
     def _dump_watchdog(self) -> None:
         """Write ``watchdog.json`` summarising both watchdog levels.
 
@@ -2281,6 +2395,8 @@ class AgentLoop:
         except Exception as exc:
             logger.debug("watchdog write failed: {}", exc)
 
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     # -- helpers --------------------------------------------------------------
 
     def _await_record(self, previous_key: str | None) -> tuple[SceneAnalysis, SourceRecord] | None:
@@ -2671,12 +2787,15 @@ class AgentLoop:
                 pass
         self._state_entered[state] = time.time()
         self._state_warned.discard(state)
+<<<<<<< HEAD
         if not hasattr(self, "_state_overruns"):
             self._state_overruns = {}
         if not hasattr(self, "_last_overrun_log"):
             self._last_overrun_log = {}
         self._state_overruns[state] = 0
         self._last_overrun_log.pop(state, None)
+=======
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         self._bus.publish(
             EventType.STATE_CHANGED,
             {"state": self._states.state.value, "detail": detail},
@@ -2698,6 +2817,7 @@ class AgentLoop:
         return budgets
 
     def _check_state_budget(self) -> None:
+<<<<<<< HEAD
         """Level-2 watchdog: surface a state that has overrun its budget.
 
         Level 1 is the sandbox watchdog (`ExecutionSandbox._watchdog_loop`):
@@ -2707,6 +2827,9 @@ class AgentLoop:
         genuinely stuck state keeps surfacing instead of logging once and going
         silent. It never blocks.
         """
+=======
+        """Log + surface a state that has overrun its budget (never blocks)."""
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         state = self._states.state
         budget = self._state_budget.get(state.value, 10.0)
         if budget <= 0:
@@ -2715,6 +2838,7 @@ class AgentLoop:
         if entered is None:
             return
         elapsed = time.time() - entered
+<<<<<<< HEAD
         if elapsed <= budget:
             return
         if not hasattr(self, "_state_overruns"):
@@ -2740,6 +2864,13 @@ class AgentLoop:
                 "budget": budget,
                 "overruns": overruns,
             })
+=======
+        if elapsed > budget and state not in self._state_warned:
+            self._state_warned.add(state)
+            reason = f"state '{state.value}' overrun ({elapsed:.1f}s > {budget:.0f}s budget)"
+            logger.warning("watchdog: {}", reason)
+            self._bus.publish(EventType.RECOVERY, {"reason": reason, "state": state.value})
+>>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
 
 __all__ = ["AgentLoop", "RecordResult", "WorkflowSummary"]
