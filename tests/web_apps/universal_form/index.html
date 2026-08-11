@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Universal Form - Generic</title>
+<style>
+  body { font-family: sans-serif; margin: 24px; color: #222; }
+  form { max-width: 640px; }
+  .row { margin: 10px 0; }
+  label { display: inline-block; width: 190px; vertical-align: top; font-weight: 600; }
+  input[type="text"], input[type="email"], input[type="tel"], input[type="number"],
+  input[type="date"], select, textarea {
+    width: 300px; padding: 5px; border: 1px solid #999; border-radius: 3px;
+  }
+  textarea { height: 60px; }
+  .scrollable { overflow: auto; max-height: 130px; border: 1px dashed #bbb; padding: 8px; }
+  .radio-group label { width: auto; font-weight: 400; margin-right: 14px; }
+  .hidden-row { display: none; }
+</style>
+</head>
+<body>
+  <h1>Universal Form</h1>
+  <p>Generic DOM form used by the universal agent (WEB_DOM path).</p>
+  <form id="app-form">
+    <div class="row">
+      <label for="f-name">Full Name</label>
+      <input id="f-name" name="full_name" type="text" autocomplete="name" required>
+    </div>
+    <div class="row">
+      <label for="f-email">Email Address</label>
+      <input id="f-email" name="email" type="email" autocomplete="email">
+    </div>
+    <div class="row">
+      <label for="f-phone">Phone Number</label>
+      <input id="f-phone" name="phone" type="tel" autocomplete="tel">
+    </div>
+    <div class="row">
+      <label for="f-age">Age</label>
+      <input id="f-age" name="age" type="number" min="1" max="120">
+    </div>
+    <div class="row">
+      <label for="f-dob">Date of Birth</label>
+      <input id="f-dob" name="dob" type="date">
+    </div>
+    <div class="row">
+      <label for="f-gender">Gender</label>
+      <select id="f-gender" name="gender">
+        <option value="">-- select --</option>
+        <option value="M">Male</option>
+        <option value="F">Female</option>
+        <option value="O">Other</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="f-country">Country</label>
+      <select id="f-country" name="country">
+        <option value="">-- select --</option>
+        <option value="IN">India</option>
+        <option value="US">USA</option>
+        <option value="GB">UK</option>
+        <option value="FR">France</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="f-state">State</label>
+      <select id="f-state" name="state"><option value="">-- select country first --</option></select>
+    </div>
+    <div class="row">
+      <label for="f-city">City</label>
+      <select id="f-city" name="city"><option value="">-- select state first --</option></select>
+    </div>
+    <div class="row">
+      <label for="f-decl">Declaration</label>
+      <input id="f-decl" name="declaration" type="checkbox">
+    </div>
+    <div class="row hidden-row" id="extra-row">
+      <label for="f-extra">Extra Details</label>
+      <input id="f-extra" name="extra_details" type="text" placeholder="additional information">
+    </div>
+    <div class="row">
+      <span style="font-weight:600">Preferred Contact</span>
+      <span class="radio-group">
+        <label><input type="radio" name="preferred_contact" value="email"> Email</label>
+        <label><input type="radio" name="preferred_contact" value="phone"> Phone</label>
+        <label><input type="radio" name="preferred_contact" value="post"> Post</label>
+      </span>
+    </div>
+    <div class="scrollable">
+      <div class="row">
+        <label for="f-address">Address</label>
+        <textarea id="f-address" name="address"></textarea>
+      </div>
+      <div class="row">
+        <label for="f-notes">Remarks</label>
+        <textarea id="f-notes" name="remarks"></textarea>
+      </div>
+    </div>
+    <div class="row">
+      <label for="f-file">Attachment</label>
+      <input id="f-file" name="attachment" type="file">
+    </div>
+    <div class="row">
+      <button id="f-submit" type="submit">Submit Application</button>
+      <button id="f-reset" type="reset">Reset</button>
+    </div>
+  </form>
+
+<script>
+  const states = {
+    "IN": ["Maharashtra", "Karnataka", "Tamil Nadu", "Delhi"],
+    "US": ["California", "Texas", "New York", "Florida"],
+    "GB": ["England", "Scotland", "Wales"],
+    "FR": ["Ile-de-France", "Provence", "Brittany"],
+  };
+  const cities = {
+    "Maharashtra": ["Mumbai", "Pune"],
+    "Karnataka": ["Bengaluru", "Mysuru"],
+    "Tamil Nadu": ["Chennai", "Coimbatore"],
+    "Delhi": ["New Delhi"],
+    "California": ["San Francisco", "Los Angeles"],
+    "Texas": ["Houston", "Austin"],
+    "New York": ["New York City", "Buffalo"],
+    "Florida": ["Miami", "Orlando"],
+    "England": ["London", "Manchester"],
+    "Scotland": ["Edinburgh", "Glasgow"],
+    "Wales": ["Cardiff"],
+    "Ile-de-France": ["Paris"],
+    "Provence": ["Marseille"],
+    "Brittany": ["Rennes"],
+  };
+  const country = document.getElementById("f-country");
+  const state = document.getElementById("f-state");
+  const city = document.getElementById("f-city");
+  function fillOptions(sel, names) {
+    sel.innerHTML = "";
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = "-- select --";
+    sel.appendChild(blank);
+    names.forEach(n => {
+      const o = document.createElement("option");
+      o.textContent = n;
+      sel.appendChild(o);
+    });
+  }
+  country.addEventListener("change", () => {
+    fillOptions(state, states[country.value] || []);
+    city.innerHTML = '<option value="">-- select state first --</option>';
+  });
+  state.addEventListener("change", () => {
+    fillOptions(city, cities[state.value] || []);
+  });
+  const decl = document.getElementById("f-decl");
+  decl.addEventListener("change", () => {
+    document.getElementById("extra-row").style.display = decl.checked ? "block" : "none";
+  });
+  document.getElementById("app-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    document.getElementById("f-submit").textContent = "Submitted";
+  });
+</script>
+</body>
+</html>
