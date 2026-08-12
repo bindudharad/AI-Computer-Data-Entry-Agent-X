@@ -145,6 +145,29 @@ def test_loop_processes_multiple_records() -> None:
     assert loop.state.value == "stopped"
 
 
+def test_loop_detects_next_record_after_repeated_same_scene() -> None:
+    """Regression: when the app keeps showing the SAME record for a few
+    observes before advancing, the await loop must not trust the cached screen
+    model and stall forever. It must re-observe until the next record appears.
+
+    Without the forced-rebuild-on-same-record fix the second ``_await_record``
+    returns the cached scene (unchanged) forever and the batch never advances.
+    """
+    target = FakeTarget([
+        make_scene("1001", "Ravi Kumar", "Yes"),
+        make_scene("1001", "Ravi Kumar", "Yes"),  # app still shows record 1001
+        make_scene("1002", "Sita Devi", "No"),
+    ])
+    controls = RecordingControls()
+    loop = _build_loop(target, controls, max_records=2, timeout=2.0)
+    summary = loop.run()
+    assert summary.completed == 2
+    assert summary.failed == 0
+    assert [r.record.record_key for r in summary.records] == ["1001", "1002"]
+    assert controls.typed == ["Ravi Kumar", "Sita Devi"]
+    assert loop.state.value == "stopped"
+
+
 def test_loop_waits_when_no_record() -> None:
     """No records must NOT terminate the loop: it retries and waits for the
     next record; only an explicit stop ends the run."""

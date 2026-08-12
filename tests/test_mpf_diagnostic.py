@@ -346,7 +346,6 @@ def test_field_mapping_json_covers_full_mpf_form() -> None:
     automation_ids = cfg.get("automation_ids", {})
     assert automation_ids.get("subCaste") == "Sub Caste"
     assert automation_ids.get("rashi") == "Rashi"
-<<<<<<< HEAD
     assert len(automation_ids) >= 20
 
 
@@ -390,6 +389,3 @@ def test_mpf_mapping_coverage_at_least_95_percent() -> None:
         f"mapping coverage {mapping.coverage:.1%} < 95% "
         f"(unmapped={mapping.unmapped_source[:5]})"
     )
-=======
-    assert len(automation_ids) >= 20
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca

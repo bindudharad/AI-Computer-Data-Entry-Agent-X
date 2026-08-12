@@ -26,6 +26,7 @@ class AgentState(str, Enum):
     RECORD_EXTRACTION = "record_extraction"  # building a Record from the left panel
     READING_RECORD = "reading_record"  # alias for RECORD_EXTRACTION (Step 8 dashboard state)
     FIELD_MAPPING = "field_mapping"  # building the UIA field map from the start control
+    MAPPING_RECOVERY = "mapping_recovery"  # source mapping coverage below threshold; recovering
     MAPPING_FIELDS = "mapping_fields"  # alias for FIELD_MAPPING (Step 8 dashboard state)
     WATCHING = "watching"
     OBSERVING = "observing"  # actively observing the screen
@@ -41,6 +42,13 @@ class AgentState(str, Enum):
     WAITING_NEXT_RECORD = "waiting_next_record"  # alias for WAITING (Step 8 dashboard state)
     VERIFYING = "verifying"
     UPLOADING = "uploading"  # submitting/uploading the current record
+    READY_TO_SUBMIT = "ready_to_submit"  # form filled; about to click submit
+    SUBMITTING = "submitting"  # submit/save click executed
+    SUBMIT_VERIFICATION = "submit_verification"  # verifying the submit outcome
+    WAITING_FOR_RESET = "waiting_for_reset"  # form resetting to the next record
+    RESET_DETECTED = "reset_detected"  # old record gone; source panel changed
+    REOBSERVE = "reobserve"  # fresh observation before the next record
+    NEXT_RECORD = "next_record"  # next record handed to the extraction stage
     COMPLETED = "completed"
     PAUSED = "paused"
     STOPPED = "stopped"
@@ -63,6 +71,7 @@ _ACTIVE_STATES = {
     AgentState.READING_RECORD,
     AgentState.FIELD_MAPPING,
     AgentState.MAPPING_FIELDS,
+    AgentState.MAPPING_RECOVERY,
     AgentState.WATCHING,
     AgentState.OBSERVING,
     AgentState.OBSERVE_VIEWPORT,
@@ -74,6 +83,13 @@ _ACTIVE_STATES = {
     AgentState.CLICKING,
     AgentState.SCROLLING,
     AgentState.UPLOADING,
+    AgentState.READY_TO_SUBMIT,
+    AgentState.SUBMITTING,
+    AgentState.SUBMIT_VERIFICATION,
+    AgentState.WAITING_FOR_RESET,
+    AgentState.RESET_DETECTED,
+    AgentState.REOBSERVE,
+    AgentState.NEXT_RECORD,
     AgentState.WAITING,
     AgentState.WAITING_NEXT_RECORD,
     AgentState.VERIFYING,
@@ -237,6 +253,7 @@ class StateMachine:
         if current == AgentState.RECORD_EXTRACTION:
             return new_state in {
                 AgentState.FIELD_MAPPING,
+                AgentState.MAPPING_RECOVERY,
                 AgentState.PLANNING,
                 AgentState.WATCHING,
                 AgentState.WAITING,
@@ -248,6 +265,7 @@ class StateMachine:
         if current == AgentState.FIELD_MAPPING:
             return new_state in {
                 AgentState.WATCHING,
+                AgentState.MAPPING_RECOVERY,
                 AgentState.PLANNING,
                 AgentState.ERROR,
                 AgentState.RECOVERY,
@@ -260,8 +278,13 @@ class StateMachine:
                 AgentState.BUILD_UI_TREE,
                 AgentState.SCREEN_MODEL,
                 AgentState.RECORD_EXTRACTION,
+                AgentState.MAPPING_RECOVERY,
                 AgentState.COMPLETED,
                 AgentState.WAITING,
+                AgentState.WAITING_FOR_RESET,
+                AgentState.RESET_DETECTED,
+                AgentState.REOBSERVE,
+                AgentState.NEXT_RECORD,
                 AgentState.ERROR,
             }
         if current == AgentState.OBSERVING:
@@ -277,6 +300,7 @@ class StateMachine:
                 AgentState.UNDERSTANDING,
                 AgentState.ANALYZING,
                 AgentState.FIELD_MAPPING,
+                AgentState.MAPPING_RECOVERY,
                 AgentState.PLANNING,
                 AgentState.WATCHING,
                 AgentState.TYPING,
@@ -288,7 +312,13 @@ class StateMachine:
                 AgentState.IDLE,
             }
         if current == AgentState.UNDERSTANDING:
-            return new_state in {AgentState.PLANNING, AgentState.ANALYZING, AgentState.ERROR, AgentState.RECOVERY}
+            return new_state in {
+                AgentState.PLANNING,
+                AgentState.MAPPING_RECOVERY,
+                AgentState.ANALYZING,
+                AgentState.ERROR,
+                AgentState.RECOVERY,
+            }
         if current == AgentState.ANALYZING:
             return new_state in {AgentState.PLANNING, AgentState.UNDERSTANDING, AgentState.ERROR, AgentState.RECOVERY}
         if current == AgentState.PLANNING:
@@ -309,6 +339,13 @@ class StateMachine:
         if current in {AgentState.TYPING, AgentState.CLICKING, AgentState.SCROLLING, AgentState.UPLOADING}:
             return new_state in {
                 AgentState.VERIFYING,
+                AgentState.READY_TO_SUBMIT,
+                AgentState.SUBMITTING,
+                AgentState.SUBMIT_VERIFICATION,
+                AgentState.WAITING_FOR_RESET,
+                AgentState.RESET_DETECTED,
+                AgentState.REOBSERVE,
+                AgentState.NEXT_RECORD,
                 AgentState.ERROR,
                 AgentState.RECOVERY,
                 AgentState.WATCHING,
@@ -317,9 +354,29 @@ class StateMachine:
             return new_state in {
                 AgentState.WATCHING,
                 AgentState.COMPLETED,
+                AgentState.WAITING_FOR_RESET,
+                AgentState.RESET_DETECTED,
+                AgentState.REOBSERVE,
+                AgentState.NEXT_RECORD,
                 AgentState.ERROR,
                 AgentState.RECOVERY,
             }
+        # Record lifecycle: submit -> verify -> wait for reset -> re-observe -> next.
+        _record_lifecycle = {
+            AgentState.READY_TO_SUBMIT,
+            AgentState.SUBMITTING,
+            AgentState.SUBMIT_VERIFICATION,
+            AgentState.WAITING_FOR_RESET,
+            AgentState.RESET_DETECTED,
+            AgentState.REOBSERVE,
+            AgentState.NEXT_RECORD,
+        }
+        if current in _record_lifecycle:
+            return new_state in (
+                _record_lifecycle
+                | {AgentState.VERIFYING, AgentState.WATCHING, AgentState.RECORD_EXTRACTION,
+                   AgentState.ERROR, AgentState.RECOVERY, AgentState.IDLE}
+            )
         if current == AgentState.COMPLETED:
             return new_state in {AgentState.WAITING, AgentState.WATCHING, AgentState.IDLE}
         if current == AgentState.WAITING:
@@ -328,6 +385,8 @@ class StateMachine:
                 AgentState.OBSERVING,
                 AgentState.SCREEN_MODEL,
                 AgentState.RECORD_EXTRACTION,
+                AgentState.REOBSERVE,
+                AgentState.NEXT_RECORD,
                 AgentState.ERROR,
                 AgentState.STOPPED,
             }
@@ -346,8 +405,28 @@ class StateMachine:
                 AgentState.BUILD_UI_TREE,
                 AgentState.SCREEN_MODEL,
                 AgentState.RECORD_EXTRACTION,
+                AgentState.READY_TO_SUBMIT,
+                AgentState.SUBMITTING,
+                AgentState.SUBMIT_VERIFICATION,
+                AgentState.WAITING_FOR_RESET,
+                AgentState.RESET_DETECTED,
+                AgentState.REOBSERVE,
+                AgentState.NEXT_RECORD,
                 AgentState.IDLE,
                 AgentState.ERROR,
+            }
+        if current == AgentState.MAPPING_RECOVERY:
+            return new_state in {
+                AgentState.WATCHING,
+                AgentState.OBSERVING,
+                AgentState.RECORD_EXTRACTION,
+                AgentState.PLANNING,
+                AgentState.FIELD_MAPPING,
+                AgentState.REOBSERVE,
+                AgentState.NEXT_RECORD,
+                AgentState.IDLE,
+                AgentState.ERROR,
+                AgentState.RECOVERY,
             }
         return False
 

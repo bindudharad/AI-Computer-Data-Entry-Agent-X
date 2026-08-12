@@ -16,17 +16,10 @@ Line numbers refer to the current tree.
 | 1 | UIA snapshot caching (single walk + scroll-container cache) | **DONE** — 493/493 green |
 | 2 | ValuePattern-first text entry (+ dead read path fixed) | **DONE** — 501/501 green |
 | 3 | No-op detection + UNKNOWN-not-PASS | **DONE** — 504/504 green |
-<<<<<<< HEAD
 | 4 | Dropdown cache / direct selection | **DONE** — 540/540 green |
 | 5 | Watchdog two-level + logging | **DONE** — 553/553 green |
 | 6 | Mapping coverage >=95% + verification hierarchy | **DONE** — 553/553 green |
 | 7 | Final UNIVERSAL_TEST_REPORT.md | **DONE** |
-=======
-| 4 | Dropdown cache / direct selection | pending |
-| 5 | Watchdog two-level + logging | pending |
-| 6 | Mapping coverage >=95% + verification hierarchy | pending |
-| 7 | Final UNIVERSAL_TEST_REPORT.md | pending |
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
 ---
 
@@ -203,7 +196,6 @@ Suite: **504/504 green** (3 new tests: no-op skip, no-op off, unverified surfaci
 
 Next: Phase 4 — dropdown cache / direct selection (the 1.7–2.0 s dropdown
 open cost from the audit, section 7 row 4).
-<<<<<<< HEAD
 
 **Phase 4 fix (DONE):** `ControlEngine.select_option` now tries a
 `option_setter` FIRST — `UiaBackend.select_option` (`uia.py`) selects combo
@@ -258,5 +250,3 @@ first-then-fallback in `test_uia_select.py` (13 tests). Suite: **540/540 green**
   falls through when UIA reads empty, and the clipboard is only consulted after
   both UIA and vision fail.
 - Suite: **553/553 green**.
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca

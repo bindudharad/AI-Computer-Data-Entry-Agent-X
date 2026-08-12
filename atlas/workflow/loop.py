@@ -18,6 +18,7 @@ and refuses to continue past a record whose actions failed verification.
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import random
 import time
@@ -29,11 +30,7 @@ from typing import Any
 from atlas.act.executor import ActionExecutor
 from atlas.act.models import Action, ActionResult, ActionType
 from atlas.core.events import EventType, get_event_bus
-<<<<<<< HEAD
 from atlas.core.logging import log_screenshot, logger, watchdog_logger
-=======
-from atlas.core.logging import log_screenshot, logger
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 from atlas.core.metrics import Timer
 from atlas.core.record_builder import RecordBuilder, RecordBuildResult
 from atlas.core.states import AgentState, StateMachine
@@ -53,10 +50,7 @@ from atlas.workflow.field_engine import (
     DEFAULT_FIELD_TIMEOUT,
     DEFAULT_SCROLL_ATTEMPTS,
     DateGroupTarget,
-<<<<<<< HEAD
     FieldStatus,
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     PendingFieldQueue,
     PerfTracker,
     ProgressGuard,
@@ -65,12 +59,10 @@ from atlas.workflow.field_engine import (
     TargetNavigator,
     build_field_actions,
     build_field_queue,
-<<<<<<< HEAD
     classify_fill_status,
     field_coverage_summary,
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     make_scroll_fn,
+    source_coverage_from_queue,
 )
 from atlas.workflow.scroll import PANEL_LEFT, PANEL_RIGHT, DualPanelScroll
 from atlas.workflow.scroller import ScrollSession, pick_left_right_containers
@@ -140,6 +132,13 @@ class RecordResult:
     unverified_fields: list[str] = field(default_factory=list)
     duration_ms: float = 0.0
     message: str = ""
+    #: Source->form coverage measured on the SOURCE side before filling
+    #: (1.0 = every valued source field bound to a form target).
+    source_coverage: float = 1.0
+    #: Number of MAPPING_RECOVERY attempts performed for this record (0 = none).
+    mapping_recovery_attempts: int = 0
+    #: Valued source labels that could not be bound to any form target.
+    unmapped_source: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -153,6 +152,9 @@ class RecordResult:
             "unverified_fields": list(self.unverified_fields),
             "duration_ms": self.duration_ms,
             "message": self.message,
+            "source_coverage": self.source_coverage,
+            "mapping_recovery_attempts": self.mapping_recovery_attempts,
+            "unmapped_source": list(self.unmapped_source),
         }
 
 
@@ -212,6 +214,30 @@ class WorkflowSummary:
         }
 
 
+@dataclass
+class RecordContext:
+    """Per-record state owned by exactly ONE source record.
+
+    Built fresh for every record and discarded once the form resets to the
+    next one, so no old-record field map / queue / status can leak into the
+    following record. The loop keeps the record's source signature to detect
+    the reset via UIA-first (no VLM).
+    """
+
+    index: int
+    record: SourceRecord
+    field_map: UiaFieldMap | None
+    queue: Any | None
+    status: str = "active"  # active | filled | submitted | failed
+    retry_count: int = 0
+    failed_fields: list[str] = field(default_factory=list)
+
+    @property
+    def source_signature(self) -> str:
+        pairs = sorted(self.record.pairs.items())
+        return "|".join(f"{k}={v}" for k, v in pairs)
+
+
 #: A panel whose structured scroll (pattern/wheel/drag/keyboard/override, all
 #: verified) fails this many cycles IN A ROW gets a raw click-and-wheel
 #: fallback forced on it regardless of what the structured methods reported -
@@ -260,6 +286,9 @@ class AgentLoop:
         field_timeout: float = DEFAULT_FIELD_TIMEOUT,
         field_scroll_attempts: int = DEFAULT_SCROLL_ATTEMPTS,
         field_retries: int = DEFAULT_FIELD_RETRIES,
+        mapping_coverage_threshold: float = 0.95,
+        mapping_recovery_max_attempts: int = 2,
+        excel_path: str = "",
     ) -> None:
         self._target = target
         self._source_reader = source_reader
@@ -299,6 +328,14 @@ class AgentLoop:
         self._field_timeout = max(1.0, float(field_timeout))
         self._field_scroll_attempts = max(1, int(field_scroll_attempts))
         self._field_retries = max(0, int(field_retries))
+        #: Source-mapping coverage gate. When the share of source fields that
+        #: bind to a form target drops below ``_mapping_coverage_threshold`` the
+        #: loop enters MAPPING_RECOVERY (re-read source, refresh the UIA field
+        #: map) instead of blindly filling whatever happened to map.
+        self._mapping_coverage_threshold = max(0.0, min(1.0, float(mapping_coverage_threshold)))
+        self._mapping_recovery_max_attempts = max(1, int(mapping_recovery_max_attempts))
+        #: Optional Excel workbook for per-record results (see _append_excel_row).
+        self._excel_path = (excel_path or "").strip()
         #: Consecutive scroll-method failures per panel (LEFT/RIGHT). When a
         #: panel's structured scroll (pattern/wheel/drag/keyboard/override)
         #: fails this many cycles IN A ROW, `_scroll_one_container` forces a
@@ -313,15 +350,12 @@ class AgentLoop:
         self._last_layout = ""
         self._state_entered: dict[AgentState, float] = {}
         self._state_warned: set[AgentState] = set()
-<<<<<<< HEAD
         #: Consecutive overrun ticks per state so the level-2 watchdog
         #: escalates instead of logging once and going silent while the loop
         #: keeps spinning inside the same stuck state. Reset on `_set`.
         self._state_overruns: dict[AgentState, int] = {}
         self._last_overrun_log: dict[AgentState, float] = {}
         self._overrun_repeat_log_seconds: float = 30.0
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         self._bus = get_event_bus()
         self._cached_analysis: SceneAnalysis | None = None
         self._last_signature = ""
@@ -336,6 +370,14 @@ class AgentLoop:
         #: The field-driven queue currently being filled, used to refresh an
         #: action's bbox right before verification (stable-id -> live position).
         self._active_queue: PendingFieldQueue | None = None
+        #: RecordContext of the record currently being filled; replaced after
+        #: every submit/reset so no stale record state leaks into the next one.
+        self._ctx: RecordContext | None = None
+        #: How long to wait (UIA-first, no VLM) for the form to reset after a
+        #: submit click before falling back to a single VLM confirmation.
+        self._submit_reset_timeout: float = 45.0
+        #: Expected record count (from --records), used for batch logging.
+        self._records_expected: int = 0
         if self._executor is not None:
             self._executor.set_bbox_refresher(self.refresh_action_bbox)
 
@@ -366,6 +408,7 @@ class AgentLoop:
             self._wait_until_stable()
             count = 0
             last_key: str | None = None
+            self._records_expected = self._max_records or 0
             while not self._stop:
                 self._check_state_budget()
                 if self._max_records and count >= self._max_records:
@@ -385,6 +428,7 @@ class AgentLoop:
                     result = self._run_record(analysis, record, count + 1)
                 summary.records.append(result)
                 count += 1
+                self._append_excel_row(result)
                 if self._on_record is not None:
                     try:
                         self._on_record(result)
@@ -395,9 +439,26 @@ class AgentLoop:
                     EventType.RECORD_COMPLETED if result.success else EventType.RECORD_FAILED,
                     result.to_dict(),
                 )
-                # After an upload the left panel changes to the next record:
-                # force the screen model to rebuild on the next observation.
-                self._force_rebuild = True
+                logger.info(
+                    "record {}/{} {} (App No {}) {} in {:.1f}s",
+                    count,
+                    self._records_expected or "?",
+                    result.record.record_key or "?",
+                    result.record.record_key or "?",
+                    "OK" if result.success else "FAILED",
+                    result.duration_ms / 1000.0,
+                )
+                if not result.success:
+                    logger.warning(
+                        "record {}/{} FAILED: {}",
+                        count,
+                        self._records_expected or "?",
+                        result.message or "unknown",
+                    )
+                # After an upload the left panel changes to the next record.
+                # Drop every per-record cache so the next record starts clean
+                # (no stale field map / queue / screen model / layout leak).
+                self._invalidate_stale_state()
         except Exception as exc:
             logger.exception("workflow failed")
             summary.stopped_reason = str(exc)
@@ -409,16 +470,271 @@ class AgentLoop:
             self._states.transition(AgentState.STOPPED)
             self._bus.publish(EventType.WORKFLOW_COMPLETE, summary.to_dict())
             self._bus.publish(EventType.AGENT_STOPPED, {"reason": summary.stopped_reason})
+            logger.info(
+                "BATCH COMPLETE: {} record(s) processed ({} OK / {} FAILED) in {:.1f}s - {}",
+                len(summary.records),
+                summary.completed,
+                summary.failed,
+                summary.total_duration,
+                summary.stopped_reason or "finished",
+            )
             self._dump_timeline(summary)
             self._dump_failure(summary)
             self._dump_focus_history()
-<<<<<<< HEAD
             self._dump_watchdog()
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
             self._dump_verification_debug(summary)
             self._dump_run_metrics(summary)
         return summary
+
+    # -- mapping recovery + Excel export ---------------------------------------
+
+    def _enter_mapping_recovery(self, reason: str) -> None:
+        """Enter MAPPING_RECOVERY and publish a recovery event.
+
+        Never treated as an error: the loop re-reads the source and refreshes
+        the UIA field map (bounded attempts) before deciding anything.
+        """
+        self._set(AgentState.MAPPING_RECOVERY, "MAPPING_RECOVERY")
+        logger.warning("MAPPING_RECOVERY: {}", reason)
+        self._bus.publish(EventType.RECOVERY, {"reason": reason, "state": "mapping_recovery"})
+
+    @staticmethod
+    def _source_coverage(record: SourceRecord, field_map: UiaFieldMap | None) -> tuple[float, list[str]]:
+        """Source-side mapping coverage: of the source labels carrying a value,
+        how many bind to a right-form target through the field map's LEFT->RIGHT
+        mappings. Returns ``(coverage, unmapped_labels)``.
+
+        This is the same metric the legacy agent reported as
+        ``mapped 21 source fields (coverage=46%)``. Below the configured
+        threshold the loop enters MAPPING_RECOVERY instead of blindly filling
+        whatever happened to map (never interprets a missing value as "nothing
+        to enter").
+        """
+        pairs = dict(getattr(record, "pairs", {}) or {})
+        ordered = list(getattr(record, "ordered_labels", None) or [])
+        valued = [label for label in ordered if pairs.get(label)]
+        if not valued:
+            return 1.0, []
+        mapped = {
+            m.get("source")
+            for m in (getattr(field_map, "mappings", None) or [])
+            if m.get("source") in pairs and pairs.get(m.get("source"))
+        }
+        unmapped = [label for label in valued if label not in mapped]
+        return len(mapped) / len(valued), unmapped
+
+    def _recover_viewport_mapping(
+        self,
+        record: SourceRecord,
+        fields: list[Any],
+        index: int,
+    ) -> tuple[SourceRecord, MappingResult, int]:
+        """Bounded MAPPING_RECOVERY for the viewport path.
+
+        Each attempt re-reads the left source panel UIA-first (fresh pairs),
+        refreshes the UIA field map (fresh geometry + mappings) and re-runs the
+        semantic mapper. Stops as soon as coverage meets the threshold, or after
+        ``_mapping_recovery_max_attempts``. Never loops.
+        """
+        self._enter_mapping_recovery(
+            f"record {index}: source coverage below {self._mapping_coverage_threshold:.0%}"
+        )
+        fresh_record = record
+        mapping = self._mapper.map(record, fields)
+        attempts = 0
+        for _ in range(self._mapping_recovery_max_attempts):
+            attempts += 1
+            try:
+                self._refresh_field_map_once()
+            except Exception as exc:
+                logger.debug("mapping recovery field-map refresh failed: {}", exc)
+            fresh = self._read_source_uia_only()
+            if fresh is not None and len(fresh) > len(fresh_record):
+                fresh_record = fresh
+            mapping = self._mapper.map(fresh_record, fields)
+            logger.info(
+                "mapping recovery attempt {}: source coverage {:.0%}",
+                attempts,
+                mapping.coverage,
+            )
+            if mapping.coverage >= self._mapping_coverage_threshold:
+                break
+        return fresh_record, mapping, attempts
+
+    def _recover_field_driven_mapping(
+        self,
+        record: SourceRecord,
+        index: int,
+    ) -> tuple[SourceRecord, PendingFieldQueue, int]:
+        """Bounded MAPPING_RECOVERY for the field-driven path.
+
+        Each attempt re-reads the source panel UIA-first, refreshes the UIA
+        field map and rebuilds the ordered fill queue. Returns the fresh record,
+        the rebuilt queue and the number of attempts performed. The queue is
+        only returned if a usable form map survived the recovery.
+        """
+        self._enter_mapping_recovery(
+            f"record {index}: source coverage below {self._mapping_coverage_threshold:.0%}"
+        )
+        fresh_record = record
+        queue: PendingFieldQueue | None = None
+        attempts = 0
+        for _ in range(self._mapping_recovery_max_attempts):
+            attempts += 1
+            try:
+                self._refresh_field_map_once()
+            except Exception as exc:
+                logger.debug("mapping recovery field-map refresh failed: {}", exc)
+            field_map = self._field_map
+            if field_map is None or not field_map.has_form:
+                break
+            fresh = self._read_source_uia_only()
+            if fresh is not None and len(fresh) > len(fresh_record):
+                fresh_record = fresh
+            queue = build_field_queue(field_map, fresh_record)
+            coverage, _unmapped = source_coverage_from_queue(fresh_record, queue)
+            logger.info(
+                "mapping recovery attempt {}: source coverage {:.0%}",
+                attempts,
+                coverage,
+            )
+            if coverage >= self._mapping_coverage_threshold:
+                break
+        if queue is None:
+            queue = (
+                build_field_queue(self._field_map, fresh_record)
+                if self._field_map is not None
+                else PendingFieldQueue([])
+            )
+        return fresh_record, queue, attempts
+
+    #: Fixed leading columns of the Excel export (per the 30-point spec).
+    _EXCEL_LEAD = ("Record Number", "App No", "MBI Code", "Full Name")
+    #: Trailing metadata columns (source fields slot in between).
+    _EXCEL_META = (
+        "Status",
+        "Timestamp",
+        "Verification Status",
+        "Error/Retry Count",
+        "Duration (s)",
+    )
+
+    def _append_excel_row(self, result: RecordResult) -> None:
+        """Append one submitted record as a row in the configured workbook.
+
+        Columns: ``Record Number | App No | MBI Code | Full Name | <every source
+        field> | Status | Timestamp | Verification Status | Error/Retry Count |
+        Duration (s)``. The workbook (and its header) is created on first use;
+        new source labels are appended after the fixed lead columns, never
+        overwriting existing rows. Failure never aborts the workflow - the row
+        is skipped with a warning.
+        """
+        path = self._excel_path
+        if not path:
+            return
+        try:
+            from openpyxl import Workbook, load_workbook
+        except ImportError:
+            logger.warning("Excel export requested but openpyxl is not installed; row skipped")
+            return
+        try:
+            excel_path = Path(path)
+            try:
+                excel_path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            exists = excel_path.exists() and excel_path.stat().st_size > 0
+            wb = load_workbook(excel_path) if exists else Workbook()
+            ws = wb.active
+            ws.title = "records"
+
+            pairs = dict(getattr(result.record, "pairs", {}) or {})
+            ordered = list(getattr(result.record, "ordered_labels", None) or [])
+            lead_extra = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Locate the canonical lead fields inside the record's own labels.
+            def _find_label(*patterns: str) -> str | None:
+                lowered = [p.lower() for p in patterns]
+                for label in ordered:
+                    hay = label.lower()
+                    if all(part in hay for part in lowered):
+                        return label
+                return None
+
+            app_label = _find_label("app", "no") or _find_label("application", "no")
+            mbi_label = _find_label("mbi")
+            name_label = _find_label("full", "name") or _find_label("name")
+            if name_label and name_label.lower().count("name") != 1:
+                for label in ordered:
+                    low = label.lower()
+                    if low in {"full name", "member name", "applicant name", "applicant", "name"}:
+                        name_label = label
+                        break
+            record_key = result.record.record_key or ""
+            app_no = pairs.get(app_label, "") if app_label else record_key
+            mbi_code = pairs.get(mbi_label, "") if mbi_label else ""
+            full_name = pairs.get(name_label, "") if name_label else ""
+
+            # Source fields = everything except the lead columns already taken.
+            taken = {app_label, mbi_label, name_label}
+            source_header = [label for label in ordered if label not in taken]
+            source_values = [pairs.get(label, "") for label in source_header]
+
+            if not exists or ws.max_row < 1 or ws.cell(row=1, column=1).value is None:
+                header = list(self._EXCEL_LEAD) + source_header + list(self._EXCEL_META)
+                ws.append(header)
+            else:
+                header = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+                known = set(header)
+                for label in source_header:
+                    if label not in known:
+                        ws.cell(row=1, column=ws.max_column + 1).value = label
+                        header.append(label)
+                        known.add(label)
+
+            lead_values = [record_key, app_no, mbi_code, full_name]
+            if not exists or ws.max_row < 2:
+                row = lead_values + source_values + [
+                    "OK" if result.success else "FAILED",
+                    lead_extra,
+                    "verified" if not result.unverified_fields
+                    else f"{len(result.unverified_fields)} unverified",
+                    str(result.mapping_recovery_attempts),
+                    f"{result.duration_ms / 1000.0:.1f}",
+                ]
+                ws.append(row)
+            else:
+                # Align the row to the (possibly grown) header: fill known lead
+                # + source cells by header name, then the trailing meta columns.
+                header_lookup = {name: c for c, name in enumerate(header, start=1)}
+                row_cells: dict[int, Any] = {}
+                for hname in self._EXCEL_LEAD:
+                    col = header_lookup.get(hname)
+                    if col is not None:
+                        row_cells[col] = lead_values[list(self._EXCEL_LEAD).index(hname)]
+                for hname, value in zip(source_header, source_values, strict=False):
+                    col = header_lookup.get(hname)
+                    if col is not None:
+                        row_cells[col] = value
+                meta_values = [
+                    "OK" if result.success else "FAILED",
+                    lead_extra,
+                    "verified" if not result.unverified_fields
+                    else f"{len(result.unverified_fields)} unverified",
+                    str(result.mapping_recovery_attempts),
+                    f"{result.duration_ms / 1000.0:.1f}",
+                ]
+                next_row = ws.max_row + 1
+                for c, value in row_cells.items():
+                    ws.cell(row=next_row, column=c).value = value
+                for j, name in enumerate(self._EXCEL_META):
+                    col = header_lookup.get(name)
+                    if col is not None:
+                        ws.cell(row=next_row, column=col).value = meta_values[j]
+            wb.save(excel_path)
+            logger.info("record {} appended to Excel export: {}", result.index, excel_path)
+        except Exception as exc:
+            logger.warning("Excel export failed for record {}: {}", result.index, exc)
 
     # -- record processing ----------------------------------------------------
 
@@ -456,6 +772,20 @@ class AgentLoop:
             self._set(AgentState.FIELD_MAPPING)
             mapping = self._mapper.map(record, fields)
             self._bus.publish(EventType.MAPPING, mapping.to_dict())
+
+            recovery_attempts = 0
+            if mapping.coverage < self._mapping_coverage_threshold:
+                record, mapping, recovery_attempts = self._recover_viewport_mapping(record, fields, index)
+                self._bus.publish(EventType.MAPPING, mapping.to_dict())
+            result_source_coverage = mapping.coverage
+            result_unmapped_source = list(mapping.unmapped_source)
+            if result_unmapped_source:
+                logger.debug(
+                    "record {}: {} source label(s) unmapped: {}",
+                    index,
+                    len(result_unmapped_source),
+                    result_unmapped_source,
+                )
 
             submit_id = self._find_submit(scene)
             self._set(AgentState.PLANNING)
@@ -517,6 +847,9 @@ class AgentLoop:
             success=self._all_ok(results),
             duration_ms=timer.elapsed * 1000.0,
         )
+        result.source_coverage = result_source_coverage
+        result.mapping_recovery_attempts = recovery_attempts
+        result.unmapped_source = result_unmapped_source
         self._learn_aliases(record, mapping, results)
         result.incomplete_fields = self._unmapped_required(mapping)
         result.skipped_fields = self._skipped_fields(results)
@@ -566,7 +899,60 @@ class AgentLoop:
             if not queue.items:
                 logger.warning("field-driven path found no fillable fields; falling back to viewport path")
                 return self._run_record(analysis, record, index)
-<<<<<<< HEAD
+
+            coverage, unmapped = source_coverage_from_queue(record, queue)
+            recovery_attempts = 0
+            if coverage < self._mapping_coverage_threshold:
+                record, queue, recovery_attempts = self._recover_field_driven_mapping(record, index)
+                field_map = self._field_map
+                if field_map is None or not field_map.has_form:
+                    logger.warning(
+                        "record {}: MAPPING_RECOVERY lost the form map; falling back to viewport path",
+                        index,
+                    )
+                    return self._run_record(analysis, record, index)
+                if not queue.items:
+                    logger.warning(
+                        "record {}: MAPPING_RECOVERY left no fillable fields; falling back to viewport path",
+                        index,
+                    )
+                    return self._run_record(analysis, record, index)
+                coverage, unmapped = source_coverage_from_queue(record, queue)
+            result_source_coverage = coverage
+            result_unmapped_source = list(unmapped)
+            logger.info(
+                "record {}: source coverage {:.0%} ({} source label(s) unmapped)",
+                index,
+                coverage,
+                len(unmapped),
+            )
+            if unmapped:
+                logger.debug("record {}: unmapped source labels: {}", index, unmapped)
+
+            # A partial source map is not a valid record.  Recovery above is
+            # deliberately bounded; if it cannot bind every valued source
+            # label with sufficient confidence, stop this record before any
+            # submit action rather than silently treating unmatched data as
+            # optional.
+            if coverage < self._mapping_coverage_threshold:
+                reason = (
+                    f"source mapping coverage {coverage:.0%} below required "
+                    f"{self._mapping_coverage_threshold:.0%}: {', '.join(unmapped)}"
+                )
+                logger.warning("record {}: submit BLOCKED - {}", index, reason)
+                self._write_field_perf(PerfTracker(), queue, index, record, [])
+                return RecordResult(
+                    index=index,
+                    record=record,
+                    mapping=MappingResult(),
+                    success=False,
+                    duration_ms=timer.elapsed * 1000.0,
+                    message=reason,
+                    source_coverage=coverage,
+                    mapping_recovery_attempts=recovery_attempts,
+                    unmapped_source=list(unmapped),
+                )
+
             order_ok, bad_at = queue.validate_order()
             if not order_ok:
                 logger.warning(
@@ -575,6 +961,12 @@ class AgentLoop:
                     bad_at,
                     len(queue.items),
                 )
+            self._ctx = RecordContext(
+                index=index,
+                record=record,
+                field_map=field_map,
+                queue=queue,
+            )
 
             perf = PerfTracker()
             key = record.record_key or ""
@@ -606,24 +998,12 @@ class AgentLoop:
             submit_ok: bool | None = None
             blockers = queue.blockers()
             if not blockers and queue.failed == 0 and self._field_map is not None:
-=======
-
-            perf = PerfTracker()
-            key = record.record_key or ""
-            self._snapshot("before-fill", index, key)
-            results = self._fill_from_queue(queue, index, perf)
-            self._snapshot("after-fill", index, key)
-
-            submit_ok: bool | None = None
-            if queue.all_ok() and self._field_map is not None:
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
                 perf.start("submit")
                 submit = self._submit_field_driven(record, index)
                 perf.stop("submit")
                 if submit is not None:
                     results.append(submit)
                     submit_ok = submit.ok
-<<<<<<< HEAD
             elif blockers:
                 logger.warning(
                     "record {}: submit BLOCKED - {} source-backed field(s) not safely filled",
@@ -635,15 +1015,12 @@ class AgentLoop:
 
             self._write_field_perf(perf, queue, index, record, timings)
 
-        success = bool(not queue.blockers() and queue.failed == 0 and submit_ok is not False)
-=======
-            elif queue.failed:
-                logger.warning("record {}: {} field(s) failed; submit skipped", index, queue.failed)
-
-            self._write_field_perf(perf, queue, index, record)
-
-        success = bool(queue.all_ok() and submit_ok is not False)
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
+        success = bool(not queue.blockers() and queue.failed == 0 and submit_ok is True)
+        if self._ctx is not None:
+            self._ctx.status = "submitted" if success else "failed"
+            self._ctx.failed_fields = [
+                it.label for it in queue.items if it.failed
+            ]
         result = RecordResult(
             index=index,
             record=record,
@@ -652,9 +1029,11 @@ class AgentLoop:
             success=success,
             duration_ms=timer.elapsed * 1000.0,
         )
+        result.source_coverage = result_source_coverage
+        result.mapping_recovery_attempts = recovery_attempts
+        result.unmapped_source = result_unmapped_source
         result.skipped_fields = self._skipped_fields(results)
         result.unverified_fields = self._unverified_fields(results)
-<<<<<<< HEAD
         parts = []
         blockers = queue.blockers()
         if blockers:
@@ -669,23 +1048,11 @@ class AgentLoop:
             result.message = f"{result.message}; {suffix}" if result.message else suffix
         logger.info(
             "record {} ({}) -> {} in {:.1f}s (field-driven) | statuses={}",
-=======
-        if result.skipped_fields or queue.failed:
-            result.message = f"{queue.failed} field(s) failed, {len(result.skipped_fields)} skipped"
-        if result.unverified_fields:
-            suffix = f"; {len(result.unverified_fields)} field(s) written but NOT verified (UNKNOWN)"
-            result.message = f"{result.message}{suffix}" if result.message else suffix[2:]
-        logger.info(
-            "record {} ({}) -> {} in {:.1f}s (field-driven)",
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
             index,
             record.record_key or "?",
             "OK" if success else "FAILED",
             result.duration_ms / 1000.0,
-<<<<<<< HEAD
             queue.status_summary(),
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         )
         return result
 
@@ -760,7 +1127,6 @@ class AgentLoop:
             return client_rect
         return (v_left, v_top, v_right, v_bottom)
 
-<<<<<<< HEAD
     def _fill_from_queue(
         self,
         queue: PendingFieldQueue,
@@ -776,10 +1142,6 @@ class AgentLoop:
         and every fill finishes with an explicit status (VERIFIED / FILLED /
         ALREADY_CORRECT / FAILED / RETRY_PENDING).
         """
-=======
-    def _fill_from_queue(self, queue: PendingFieldQueue, index: int, perf: PerfTracker) -> list[ActionResult]:
-        """Walk the queue: fill visible targets, scroll RIGHT to reach below-fold ones."""
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         results: list[ActionResult] = []
         self._active_queue = queue
         client_rect = self._client_rect()
@@ -789,15 +1151,11 @@ class AgentLoop:
         session = self._field_scroll_session()
         viewport = self._field_fill_viewport(session, client_rect)
         scrolled: dict[str, int] = {}
-<<<<<<< HEAD
         total = len(queue.items)
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         while not self._stop and queue.next_pending() is not None:
             self._check_state_budget()
             target = queue.next_pending()
             guard.begin()
-<<<<<<< HEAD
             label = target.label or target.stable_id
             if not target.source_backed:
                 self._mark_skipped(
@@ -815,15 +1173,10 @@ class AgentLoop:
                         EventType.ACTION_STARTED,
                         {"type": "FILL", "field_id": target.stable_id, "label": target.label},
                     )
-=======
-            if navigator.fillable(target, viewport):
-                if self._wait_target_enabled(queue, target, guard, navigator, viewport):
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
                     perf.start("fill")
                     ok, action_results = self._fill_target(target, index)
                     perf.stop("fill")
                     results.extend(action_results)
-<<<<<<< HEAD
                     elapsed = time.time() - t0
                     self._warn_field_latency(target, elapsed)
                     if ok:
@@ -835,15 +1188,10 @@ class AgentLoop:
                             done_now, total, label[:24], elapsed, status.value,
                         )
                         self._record_timing(timings, target, status, elapsed)
-=======
-                    if ok:
-                        queue.mark_done(target)
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
                         continue
                     target.retries += 1
                     if target.retries > self._field_retries:
                         self._mark_failed(queue, target, results, "fill failed")
-<<<<<<< HEAD
                         self._record_timing(timings, target, FieldStatus.FAILED, elapsed)
                         continue
                     queue.mark_status(target, FieldStatus.RETRY_PENDING, "fill failed once - retrying")
@@ -852,30 +1200,16 @@ class AgentLoop:
                     continue
                 self._mark_failed(queue, target, results, "dependent field never enabled")
                 self._record_timing(timings, target, FieldStatus.FAILED, 0.0)
-=======
-                        continue
-                    self._refresh_field_map_once()
-                    if self._field_map is not None:
-                        queue.refresh_positions(self._field_map.right_fields)
-                    continue
-                self._mark_failed(queue, target, results, "dependent field never enabled")
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
                 continue
             # Below the fold: scroll the RIGHT panel toward the target.
             if not self._field_driven_scroll:
                 self._mark_failed(queue, target, results, "target below fold and scroll disabled")
-<<<<<<< HEAD
                 self._record_timing(timings, target, FieldStatus.FAILED, 0.0)
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
                 continue
             tries = scrolled.get(target.stable_id, 0)
             if tries >= self._field_scroll_attempts:
                 self._mark_failed(queue, target, results, "target below fold after repeated scrolling")
-<<<<<<< HEAD
                 self._record_timing(timings, target, FieldStatus.FAILED, 0.0)
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
                 continue
             perf.start("scroll")
             moved = self._scroll_to_target(queue, target, viewport, session, cache, navigator, guard)
@@ -883,7 +1217,6 @@ class AgentLoop:
             scrolled[target.stable_id] = tries + 1
             if not moved and not navigator.fillable(target, viewport):
                 self._mark_failed(queue, target, results, "could not scroll target into view")
-<<<<<<< HEAD
                 self._record_timing(timings, target, FieldStatus.FAILED, 0.0)
                 continue
         return results
@@ -925,11 +1258,6 @@ class AgentLoop:
         if added:
             logger.info("field queue grew by {} field(s) after refresh", added)
 
-=======
-                continue
-        return results
-
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     def _wait_target_enabled(
         self,
         queue: PendingFieldQueue,
@@ -961,17 +1289,12 @@ class AgentLoop:
         # stalling the record.
         deadline = time.time() + min(5.0, self._field_timeout)
         while not self._stop and not guard.expired and time.time() < deadline:
-<<<<<<< HEAD
             # NOTE: no early-return when the target scrolls away mid-wait. The
             # fill loop never scrolls during this wait, so a target that
             # entered fillable stays fillable; returning True on a non-fillable
             # target used to let a STILL-DISABLED field be marked done with no
             # actions (a silent skip of the very dependent combos this wait
             # exists to protect).
-=======
-            if not navigator.fillable(target, viewport):
-                return True  # scrolled away; handled by the scroll branch
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
             time.sleep(intervals[idx])
             idx = min(idx + 1, len(intervals) - 1)
             self._refresh_field_map_once()
@@ -1034,10 +1357,7 @@ class AgentLoop:
             self._refresh_field_map_once()
             if self._field_map is not None:
                 queue.refresh_positions(self._field_map.right_fields)
-<<<<<<< HEAD
                 queue.merge_fields(self._field_map.right_fields)
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
             if navigator.fillable(target, viewport) or before.moved(container, target):
                 return True
             before = ScrollProgress.capture(container, target)
@@ -1066,10 +1386,7 @@ class AgentLoop:
             self._refresh_field_map_once()
             if self._field_map is not None:
                 queue.refresh_positions(self._field_map.right_fields)
-<<<<<<< HEAD
                 queue.merge_fields(self._field_map.right_fields)
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
             if navigator.fillable(target, viewport):
                 return True
         return navigator.fillable(target, viewport)
@@ -1143,7 +1460,6 @@ class AgentLoop:
             message=reason,
         ))
 
-<<<<<<< HEAD
     def _mark_skipped(
         self,
         queue: PendingFieldQueue,
@@ -1173,8 +1489,6 @@ class AgentLoop:
             message=reason,
         ))
 
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     def _submit_field_driven(self, record: SourceRecord, index: int) -> ActionResult | None:
         """Click the upload button once, then verify with a single VLM observe."""
         field_map = self._field_map
@@ -1191,9 +1505,10 @@ class AgentLoop:
             reason="click submit button after filling the form",
         )
         self._bus.publish(EventType.UPLOADING, action.to_dict())
-        self._set(AgentState.UPLOADING, "UPLOADING")
+        self._set(AgentState.READY_TO_SUBMIT, "READY_TO_SUBMIT")
         self._last_field = action.field_id or action.reason
         result = self._executor.execute(action)
+        self._set(AgentState.SUBMITTING, "SUBMITTING")
         if result.ok:
             self._bus.publish(EventType.UPLOAD_COMPLETED, result.to_dict())
             self._snapshot("after-upload", index, record.record_key or "")
@@ -1201,7 +1516,45 @@ class AgentLoop:
         return result
 
     def _verify_submit(self, record: SourceRecord) -> bool:
-        """One VLM re-observe: record-key change or success text proves the submit."""
+        """Verify the submit by waiting for the form to reset to the next record.
+
+        UIA-first: refresh the left source panel and watch for a source-signature
+        change (new App No / cleared form) each poll - no VLM, no OCR. Only after
+        ``_submit_reset_timeout`` does it take ONE full VLM re-observe and fall
+        back to the legacy success/error-token check. Returns True only on
+        evidence of a successful submit + reset; never blocks forever.
+        """
+        old_key = record.record_key or ""
+        old_sig = sorted(record.pairs.items())
+        self._set(AgentState.SUBMIT_VERIFICATION, "SUBMIT_VERIFICATION")
+        deadline = time.time() + self._submit_reset_timeout
+        last_wait_log = 0.0
+        while not self._stop and time.time() < deadline:
+            self._check_state_budget()
+            self._set(AgentState.WAITING_FOR_RESET, "WAITING_FOR_RESET")
+            next_record = self._read_source_uia_only()
+            if next_record is not None:
+                new_key = next_record.record_key or ""
+                new_sig = sorted(next_record.pairs.items())
+                if (new_key and new_key != old_key) or new_sig != old_sig:
+                    self._publish_reset(old_key, new_key)
+                    self._invalidate_stale_state()
+                    return True
+                # Same record still showing: the form has not reset yet.
+            now = time.time()
+            if now - last_wait_log >= 10.0:
+                last_wait_log = now
+                logger.info(
+                    "submit: waiting for form reset ({}s remaining)...",
+                    int(deadline - now),
+                )
+            if not self._target.is_alive():
+                logger.warning("target window disappeared during submit verification")
+                return False
+            time.sleep(self._next_poll)
+
+        # Timeout: single VLM fallback (legacy success/error-token check).
+        logger.info("submit: reset not detected via UIA; one VLM confirmation observe")
         self._force_rebuild = True
         try:
             analysis, _ = self._observe()
@@ -1217,6 +1570,8 @@ class AgentLoop:
             logger.debug("post-submit record read failed: {}", exc)
             next_record = None
         if next_record is not None and next_record.record_key and next_record.record_key != record.record_key:
+            self._publish_reset(old_key, next_record.record_key)
+            self._invalidate_stale_state()
             return True
         text = " ".join(
             f"{e.label or ''} {e.name or ''}".lower()
@@ -1229,7 +1584,35 @@ class AgentLoop:
             return True
         return not any(token in text for token in ("error", "failed", "validation error", "invalid", "cannot be blank"))
 
-<<<<<<< HEAD
+    def _publish_reset(self, old_key: str, new_key: str) -> None:
+        """Log + publish a form-reset (old record gone, source panel changed)."""
+        self._set(AgentState.RESET_DETECTED, "RESET_DETECTED")
+        logger.info("RESET DETECTED: {} -> {}", old_key or "?", new_key or "?")
+        self._bus.publish(EventType.RECOVERY, {
+            "reason": f"record reset {old_key or '?'} -> {new_key or '?'}",
+            "state": "reset_detected",
+        })
+
+    def _log_reset_transition(self, previous_key: str | None, record: SourceRecord) -> None:
+        """Log the record-key transition observed by the await loop."""
+        key = record.record_key or ""
+        if previous_key and key and previous_key != key:
+            logger.info("NEXT RECORD: {} -> {}", previous_key, key)
+
+    def _invalidate_stale_state(self) -> None:
+        """Drop every per-record cache so the next record starts clean.
+
+        Old field-map geometry, the fill queue, the cached screen model and the
+        layout fingerprint all belong to the record that just left; keeping any
+        of them would leak stale data into the next record.
+        """
+        self._ctx = None
+        self._active_queue = None
+        self._last_layout = ""
+        self._cached_analysis = None
+        self._force_rebuild = True
+        self._no_record_last_reason = ""
+
     def _write_field_perf(
         self, perf: PerfTracker, queue: PendingFieldQueue, index: int, record: SourceRecord,
         timings: list[dict] | None = None,
@@ -1245,26 +1628,19 @@ class AgentLoop:
             len(queue.skipped_items),
             queue.failed,
         )
-=======
-    def _write_field_perf(self, perf: PerfTracker, queue: PendingFieldQueue, index: int, record: SourceRecord) -> None:
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         if self._debug_dir is None:
             return
         self._write_debug("field_driven_perf.json", {
             "record_index": index,
             "key": record.record_key,
             "phases": perf.to_dict(),
-<<<<<<< HEAD
             "coverage": coverage,
             "timings": timings or [],
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
             "queue": {
                 "total": len(queue.items),
                 "done": queue.done,
                 "failed": queue.failed,
                 "remaining": queue.remaining,
-<<<<<<< HEAD
                 "skipped": len(queue.skipped_items),
                 "statuses": queue.status_summary(),
                 "blockers": [
@@ -1275,8 +1651,6 @@ class AgentLoop:
                     }
                     for it in queue.blockers()
                 ],
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
             },
         })
 
@@ -2362,7 +2736,6 @@ class AgentLoop:
         except Exception as exc:
             logger.debug("focus_history write failed: {}", exc)
 
-<<<<<<< HEAD
     def _dump_watchdog(self) -> None:
         """Write ``watchdog.json`` summarising both watchdog levels.
 
@@ -2395,8 +2768,6 @@ class AgentLoop:
         except Exception as exc:
             logger.debug("watchdog write failed: {}", exc)
 
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     # -- helpers --------------------------------------------------------------
 
     def _await_record(self, previous_key: str | None) -> tuple[SceneAnalysis, SourceRecord] | None:
@@ -2414,10 +2785,33 @@ class AgentLoop:
             if self._next_timeout is not None and not self._stop:
                 deadline = time.time() + self._next_timeout
                 while not self._stop and time.time() < deadline:
+                    if self._target is not None and not self._target.is_alive():
+                        logger.warning("target window disappeared while awaiting a record")
+                        self._set(AgentState.STOPPED)
+                        return None
+                    # UIA-first (cheap, no VLM): detect the next record straight
+                    # from the left source panel before spending a full observe.
+                    uia_record = self._read_source_uia_only()
+                    if uia_record is not None:
+                        if self._accept_record(uia_record, previous_key, None):
+                            self._set(AgentState.REOBSERVE, "REOBSERVE")
+                            self._force_rebuild = True
+                            analysis, _ = self._observe()
+                            if analysis is None:
+                                continue
+                            record = self._extract_record(analysis.scene)
+                            if record is not None and self._accept_record(record, previous_key, analysis.scene):
+                                self._set(AgentState.NEXT_RECORD, "NEXT_RECORD")
+                                self._log_reset_transition(previous_key, record)
+                                self._bus.publish(EventType.NEXT_RECORD_DETECTED, {"key": record.record_key})
+                                return analysis, record
+                        time.sleep(self._next_poll)
+                        continue
                     analysis, changed = self._observe()
                     if analysis is not None and changed:
                         record = self._extract_record(analysis.scene)
                         if record is not None and self._accept_record(record, previous_key, analysis.scene):
+                            self._log_reset_transition(previous_key, record)
                             self._bus.publish(EventType.NEXT_RECORD_DETECTED, {"key": record.record_key})
                             return analysis, record
                         if record is None:
@@ -2428,6 +2822,10 @@ class AgentLoop:
                             time.sleep(self._next_poll)
                             continue
                         if self._same_record(record, previous_key):
+                            # Same record: never trust the cached screen model -
+                            # force a rebuild on the next poll so a submit/reset
+                            # happening behind the scenes is still detected.
+                            self._force_rebuild = True
                             self._bus.publish(EventType.NEXT_RECORD_WAITING, {"key": record.record_key})
                     time.sleep(self._next_poll)
                 if not self._stop:
@@ -2437,6 +2835,7 @@ class AgentLoop:
                 if analysis is not None and changed:
                     record = self._extract_record(analysis.scene)
                     if record is not None and self._accept_record(record, previous_key, analysis.scene):
+                        self._log_reset_transition(previous_key, record)
                         self._bus.publish(EventType.NEXT_RECORD_DETECTED, {"key": record.record_key})
                         return analysis, record
                     if record is None:
@@ -2452,7 +2851,7 @@ class AgentLoop:
             return True
         if not record.pairs:
             return False
-        if key is None and scene.layout_summary != (self._last_layout or ""):
+        if key is None and scene is not None and scene.layout_summary != (self._last_layout or ""):
             self._last_layout = scene.layout_summary
             return True
         return False
@@ -2585,9 +2984,46 @@ class AgentLoop:
                     return pairs
             labels = self._field_map.left_labels
             if labels:
-                return [(self._clean_node_name(label), "") for label in labels]
+                # UIA-first: live MPF exposes each source value as a sibling
+                # text node, so geometric pairing recovers real values without
+                # OCR. Only fall back to label-only (empty values) when the
+                # UIA tree has no value nodes at all.
+                return pair_source_pairs([], labels) or [
+                    (self._clean_node_name(label), "") for label in labels
+                ]
         record = self._source_reader.read(scene)
         return [(label, record.pairs.get(label, "")) for label in record.ordered_labels]
+
+    def _read_source_uia_only(self) -> SourceRecord | None:
+        """Read the left source panel using ONLY UIA (no VLM, no OCR).
+
+        Live MPF exposes the source label/value rows as sibling UIA text nodes,
+        so ``pair_source_pairs`` can pair them without an image read. Used for
+        cheap per-poll reset/new-record detection after a submit. Returns None
+        while the left panel is loading/cleared, so callers keep waiting.
+        """
+        if self._field_map_refresh is None or self._field_map is None or not self._field_map.has_source:
+            return None
+        try:
+            self._refresh_field_map_once()
+        except Exception as exc:
+            logger.debug("uia source refresh failed: {}", exc)
+        field_map = self._field_map
+        if field_map is None or not field_map.has_source or not field_map.left_labels:
+            return None
+        try:
+            pairs = pair_source_pairs([], field_map.left_labels)
+        except Exception as exc:
+            logger.debug("uia-only source pairing failed: {}", exc)
+            pairs = []
+        if not pairs:
+            return None
+        try:
+            result = self._record_builder.build(pairs, title="")
+        except Exception as exc:
+            logger.debug("uia-only record build failed: {}", exc)
+            return None
+        return result.record
 
     def _report_no_record(self, scene: SceneDescription | None = None, result: RecordBuildResult | None = None) -> None:
         """Surface a no-record condition and write ``debug/no_record.json``."""
@@ -2787,15 +3223,12 @@ class AgentLoop:
                 pass
         self._state_entered[state] = time.time()
         self._state_warned.discard(state)
-<<<<<<< HEAD
         if not hasattr(self, "_state_overruns"):
             self._state_overruns = {}
         if not hasattr(self, "_last_overrun_log"):
             self._last_overrun_log = {}
         self._state_overruns[state] = 0
         self._last_overrun_log.pop(state, None)
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         self._bus.publish(
             EventType.STATE_CHANGED,
             {"state": self._states.state.value, "detail": detail},
@@ -2817,7 +3250,6 @@ class AgentLoop:
         return budgets
 
     def _check_state_budget(self) -> None:
-<<<<<<< HEAD
         """Level-2 watchdog: surface a state that has overrun its budget.
 
         Level 1 is the sandbox watchdog (`ExecutionSandbox._watchdog_loop`):
@@ -2827,9 +3259,6 @@ class AgentLoop:
         genuinely stuck state keeps surfacing instead of logging once and going
         silent. It never blocks.
         """
-=======
-        """Log + surface a state that has overrun its budget (never blocks)."""
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         state = self._states.state
         budget = self._state_budget.get(state.value, 10.0)
         if budget <= 0:
@@ -2838,7 +3267,6 @@ class AgentLoop:
         if entered is None:
             return
         elapsed = time.time() - entered
-<<<<<<< HEAD
         if elapsed <= budget:
             return
         if not hasattr(self, "_state_overruns"):
@@ -2864,13 +3292,6 @@ class AgentLoop:
                 "budget": budget,
                 "overruns": overruns,
             })
-=======
-        if elapsed > budget and state not in self._state_warned:
-            self._state_warned.add(state)
-            reason = f"state '{state.value}' overrun ({elapsed:.1f}s > {budget:.0f}s budget)"
-            logger.warning("watchdog: {}", reason)
-            self._bus.publish(EventType.RECOVERY, {"reason": reason, "state": state.value})
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
 
 __all__ = ["AgentLoop", "RecordResult", "WorkflowSummary"]

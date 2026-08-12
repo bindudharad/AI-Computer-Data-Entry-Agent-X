@@ -17,10 +17,7 @@ from atlas.core.logging import (
     timing_logger,
     uia_logger,
     verification_logger,
-<<<<<<< HEAD
     watchdog_logger,
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 )
 
 
@@ -28,11 +25,7 @@ def test_setup_logging_creates_all_category_files(tmp_path) -> None:
     setup_logging("DEBUG", tmp_path, capture_stdout=False)
     files = {p.name for p in tmp_path.iterdir()}
     # main rotating log uses a timestamped name; category files are static.
-<<<<<<< HEAD
     for stem in ("actions", "errors", "ocr", "uia", "timings", "focus", "verification", "watchdog"):
-=======
-    for stem in ("actions", "errors", "ocr", "uia", "timings", "focus", "verification"):
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         assert f"{stem}.log" in files, f"missing {stem}.log in {sorted(files)}"
 
 
@@ -44,10 +37,7 @@ def test_category_loggers_route_to_own_file(tmp_path) -> None:
     uia_logger.info("hello uia")
     timing_logger.info("hello timing")
     verification_logger.info("hello verification")
-<<<<<<< HEAD
     watchdog_logger.info("hello watchdog")
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
     action_logger.complete()
     assert "hello action" in (tmp_path / "actions.log").read_text(encoding="utf-8")
@@ -57,10 +47,7 @@ def test_category_loggers_route_to_own_file(tmp_path) -> None:
     assert "hello uia" in (tmp_path / "uia.log").read_text(encoding="utf-8")
     assert "hello timing" in (tmp_path / "timings.log").read_text(encoding="utf-8")
     assert "hello verification" in (tmp_path / "verification.log").read_text(encoding="utf-8")
-<<<<<<< HEAD
     assert "hello watchdog" in (tmp_path / "watchdog.log").read_text(encoding="utf-8")
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
 
 def test_errors_always_land_in_errors_log(tmp_path) -> None:
@@ -75,11 +62,7 @@ def test_errors_always_land_in_errors_log(tmp_path) -> None:
 def test_category_namespace_covers_spec_files() -> None:
     # "errors" is a dedicated error-level sink, not a category binding.
     assert set(CATEGORIES.values()) == {
-<<<<<<< HEAD
         "actions", "ocr", "uia", "timings", "focus", "verification", "watchdog"
-=======
-        "actions", "ocr", "uia", "timings", "focus", "verification"
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     }
 
 

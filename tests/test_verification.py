@@ -280,7 +280,6 @@ def test_uia_verifier_unknown_on_empty() -> None:
     ok, evidence = verifier.verify(BBox(0, 0, 10, 10), "Ravi", "f0")
     assert ok is False
     assert classify_evidence(evidence) is VerificationStatus.UNKNOWN
-<<<<<<< HEAD
 
 
 # -- verification hierarchy: UIA -> Vision -> TargetField -> Clipboard ----------
@@ -343,5 +342,3 @@ def test_composite_verifier_clipboard_is_last_resort() -> None:
     assert uia.calls == 1
     assert vision.calls == 1
     assert clipboard.calls == 1
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca

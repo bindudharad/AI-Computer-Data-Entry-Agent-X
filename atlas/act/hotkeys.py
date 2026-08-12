@@ -3,7 +3,7 @@
 Registers system-wide hotkeys:
 
   ESC           - immediately pause
-  Ctrl+Shift+S  - safe stop (release input, locks, workers, timers)
+  Ctrl+S        - safe stop (release input, locks, workers, timers)
   Ctrl+Shift+R  - resume
   Ctrl+Shift+Q  - quit safely
 
@@ -49,7 +49,7 @@ class HotkeyManager:
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
-        logger.info("hotkey manager started (ESC=pause, Ctrl+Shift+S=stop, Ctrl+Shift+R=resume, Ctrl+Shift+Q=quit)")
+        logger.info("hotkey manager started (ESC=pause, Ctrl+S=stop, Ctrl+Shift+R=resume, Ctrl+Shift+Q=quit)")
 
     def stop(self) -> None:
         """Stop the hotkey listener thread."""
@@ -74,7 +74,7 @@ class HotkeyManager:
         # VK codes: ESC=0x1B, S=0x53, R=0x52, Q=0x51
         hotkey_map = {
             1: ("pause", 0x1B, 0),  # ESC - immediately pause
-            2: ("stop", 0x53, win32con.MOD_CONTROL | win32con.MOD_SHIFT),  # Ctrl+Shift+S safe stop
+            2: ("stop", 0x53, win32con.MOD_CONTROL),  # Ctrl+S safe stop
             3: ("resume", 0x52, win32con.MOD_CONTROL | win32con.MOD_SHIFT),
             4: ("quit", 0x51, win32con.MOD_CONTROL | win32con.MOD_SHIFT),
         }

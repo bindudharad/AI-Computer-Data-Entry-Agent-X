@@ -27,10 +27,7 @@ This module is pure logic (duck-typed UIA nodes) so it is fully unit-testable.
 
 from __future__ import annotations
 
-<<<<<<< HEAD
 import enum
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 import re
 import time
 from collections.abc import Callable
@@ -62,7 +59,6 @@ DEFAULT_SCROLL_ATTEMPTS = 6
 DEFAULT_FIELD_RETRIES = 1
 
 
-<<<<<<< HEAD
 class FieldStatus(str, enum.Enum):
     """Explicit lifecycle status for one queued field.
 
@@ -119,10 +115,100 @@ def classify_fill_status(results: list[Any]) -> FieldStatus:
     return FieldStatus.VERIFIED if verified else FieldStatus.FILLED
 
 
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 def _clean_label(text: str) -> str:
     return re.sub(r"[:：\s]+$", "", (text or "")).strip()
+
+
+def _norm_label(text: str) -> str:
+    """Canonical label key for safe source<->target binding."""
+    text = _clean_label(text)
+    text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+_LABEL_ALIASES: dict[str, tuple[str, ...]] = {
+    "appno": ("applicationno", "applicationnumber", "application"),
+    "applicationno": ("appno", "applicationnumber"),
+    "applicationnumber": ("appno", "applicationno"),
+    "mbicode": ("memberbasicinformationcode",),
+    "raicode": ("religiousastroinformationcode",),
+    "phicode": ("physicalhabitsinformationcode",),
+    "ecicode": ("educationcareerinformationcode",),
+    "mothertongue": ("mother tongue",),
+    "subcaste": ("sub caste", "sub-caste"),
+    "employmentstatus": ("empstatus", "employment", "occupationstatus"),
+    "empstatus": ("employmentstatus",),
+    "annualincome": ("income", "yearlyincome"),
+    "income": ("annualincome",),
+    "dateofbirth": ("dob", "birthdate"),
+    "dob": ("dateofbirth", "birthdate"),
+}
+
+
+def _alias_keys(label: str) -> set[str]:
+    raw = _clean_label(label)
+    keys = {_norm_label(raw), _norm_label(re.sub(r"\s+", "", raw.lower()))}
+    for key in list(keys):
+        for alias in _LABEL_ALIASES.get(key, ()):
+            keys.add(_norm_label(alias))
+    return {k for k in keys if k}
+
+
+def _source_value_index(pairs: dict[str, str]) -> dict[str, str]:
+    """Index source LABELS to values; never source values to labels."""
+    out: dict[str, str] = {}
+    for label, value in pairs.items():
+        if value is None:
+            continue
+        for key in _alias_keys(label):
+            out.setdefault(key, value)
+    return out
+
+
+def _target_keys(node: Any) -> set[str]:
+    keys: set[str] = set()
+    for text in (
+        getattr(node, "name", "") or "",
+        getattr(node, "automation_id", "") or "",
+        getattr(node, "placeholder", "") or "",
+    ):
+        keys.update(_alias_keys(text))
+    return keys
+
+
+def _mapped_target_values(
+    field_map: Any,
+    pairs: dict[str, str],
+    mappings: list[dict[str, str]] | None,
+) -> dict[str, str]:
+    """Resolve target field labels/ids to source values with safe aliases."""
+    source_index = _source_value_index(pairs)
+    target_value: dict[str, str] = {}
+    for m in (mappings if mappings is not None else getattr(field_map, "mappings", None) or []):
+        source = m.get("source", "")
+        target = m.get("target", "")
+        if not target:
+            continue
+        value = next((source_index[k] for k in _alias_keys(source) if k in source_index), None)
+        if value is None:
+            continue
+        for key in {_clean_label(target), target, *_alias_keys(target)}:
+            if key:
+                target_value.setdefault(key, value)
+    for node in (getattr(field_map, "right_fields", None) or []):
+        for tkey in _target_keys(node):
+            if tkey not in source_index:
+                continue
+            value = source_index[tkey]
+            for key in {
+                _clean_label(getattr(node, "name", "") or ""),
+                (getattr(node, "automation_id", "") or "").strip(),
+                tkey,
+            }:
+                if key:
+                    target_value.setdefault(key, value)
+            break
+    return target_value
 
 
 def split_date_parts(value: str | None) -> list[str]:
@@ -214,7 +300,20 @@ def _index_nodes(nodes: list[Any]) -> list[tuple[tuple, Any]]:
     return out
 
 
-<<<<<<< HEAD
+def _is_form_control(node: Any) -> bool:
+    """Return whether ``node`` is a persistent target-form control.
+
+    An expanded custom dropdown is represented in UIA as editable ``ListItem``
+    nodes.  Those are transient popup OPTIONS, never fields in the document
+    queue.  Keeping them out at both initial build and refresh prevents a
+    popup from inflating the queue or appearing as a fake ``NO_SOURCE`` field.
+    Other control types remain allowed for custom/browser-rendered controls.
+    """
+    return (getattr(node, "control_type", "") or "") not in {
+        "List", "ListItem", "Menu", "MenuItem", "Tree", "TreeItem",
+    }
+
+
 def field_coverage_summary(queue: Any) -> dict:
     """Target-based inventory ledger: every form control is accounted for.
 
@@ -244,8 +343,30 @@ def field_coverage_summary(queue: Any) -> dict:
     }
 
 
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
+def source_coverage_from_queue(record: Any, queue: Any) -> tuple[float, list[str]]:
+    """Source-side coverage from the final ordered queue bindings."""
+    pairs = dict(getattr(record, "pairs", {}) or {})
+    valued = [label for label, value in pairs.items() if str(value or "").strip()]
+    if not valued:
+        return 1.0, []
+    covered: set[str] = set()
+    for item in list(getattr(queue, "items", None) or []):
+        if not getattr(item, "source_backed", False):
+            continue
+        labels = [getattr(item, "label", "") or ""]
+        if isinstance(item, DateGroupTarget):
+            labels.extend(getattr(t, "label", "") or "" for t in item.targets)
+            labels.extend(("Date Of Birth", "DOB"))
+        item_keys: set[str] = set()
+        for label in labels:
+            item_keys.update(_alias_keys(label))
+        for source_label in valued:
+            if _alias_keys(source_label) & item_keys:
+                covered.add(source_label)
+    unmapped = [label for label in valued if label not in covered]
+    return (len(covered) / len(valued)), unmapped
+
+
 @dataclass
 class FieldTarget:
     """One fillable form control plus the source value bound to it."""
@@ -257,11 +378,8 @@ class FieldTarget:
     done: bool = False
     failed: bool = False
     _match_key: tuple = field(default=(), repr=False)
-<<<<<<< HEAD
     status: FieldStatus = FieldStatus.PENDING
     status_reason: str = ""
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
     @property
     def stable_id(self) -> str:
@@ -291,7 +409,6 @@ class FieldTarget:
     def enabled(self) -> bool:
         return bool(getattr(self.node, "enabled", True))
 
-<<<<<<< HEAD
     @property
     def source_backed(self) -> bool:
         """True when a source value is bound to this field."""
@@ -322,8 +439,6 @@ class FieldTarget:
     def placeholder(self) -> str:
         return (getattr(self.node, "placeholder", None) or "").strip()
 
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
 @dataclass
 class DateGroupTarget:
@@ -336,11 +451,8 @@ class DateGroupTarget:
     #: The source value the whole group was filled from (e.g. ``1996-02-02``),
     #: used by the whole-group post-fill verification.
     date_value: str = ""
-<<<<<<< HEAD
     status: FieldStatus = FieldStatus.PENDING
     status_reason: str = ""
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
     @property
     def stable_id(self) -> str:
@@ -358,13 +470,10 @@ class DateGroupTarget:
         return ""
 
     @property
-<<<<<<< HEAD
     def source_backed(self) -> bool:
         return any(t.source_backed for t in self.targets)
 
     @property
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     def bbox(self) -> BBox | None:
         """The union box spanning all three part controls.
 
@@ -522,7 +631,6 @@ def _merge_date_groups(targets: list[FieldTarget], date_value: str | None = None
 
 
 class PendingFieldQueue:
-<<<<<<< HEAD
     """Ordered queue of fields to fill for one record.
 
     Every target carries an explicit :class:`FieldStatus`. A target is never
@@ -542,12 +650,6 @@ class PendingFieldQueue:
         #: Source record + mappings used to bind values to late-joining fields.
         self.record = record
         self.mappings = list(mappings or [])
-=======
-    """Ordered queue of fields to fill for one record."""
-
-    def __init__(self, items: list[Any]) -> None:
-        self.items: list[Any] = list(items)
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
     @property
     def remaining(self) -> int:
@@ -571,7 +673,6 @@ class PendingFieldQueue:
                 return it
         return None
 
-<<<<<<< HEAD
     def mark_status(self, target: Any, status: FieldStatus, reason: str = "") -> None:
         """Set a target's explicit status, keeping ``done``/``failed`` in sync."""
         target.status = FieldStatus(status)
@@ -598,13 +699,6 @@ class PendingFieldQueue:
         self.mark_status(target, status, reason)
         if target not in self.skipped_items:
             self.skipped_items.append(target)
-=======
-    def mark_done(self, target: Any) -> None:
-        target.done = True
-
-    def mark_failed(self, target: Any, reason: str = "") -> None:
-        target.failed = True
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
     def submit_ready(self) -> bool:
         return self.remaining == 0
@@ -612,7 +706,6 @@ class PendingFieldQueue:
     def all_ok(self) -> bool:
         return self.remaining == 0 and self.failed == 0
 
-<<<<<<< HEAD
     def blockers(self) -> list[Any]:
         """Source-backed targets that are NOT safely filled (never submit partial).
 
@@ -653,8 +746,6 @@ class PendingFieldQueue:
                 return False, i
         return True, -1
 
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     def refresh_positions(self, fresh_nodes: list[Any]) -> int:
         """Re-match pending targets against a fresh UIA snapshot by stable key.
 
@@ -671,7 +762,6 @@ class PendingFieldQueue:
                     updated += 1
         return updated
 
-<<<<<<< HEAD
     def merge_fields(
         self,
         fresh_nodes: list[Any],
@@ -691,7 +781,7 @@ class PendingFieldQueue:
             sub = item.targets if isinstance(item, DateGroupTarget) else [item]
             for target in sub:
                 existing.add(target._match_key)
-        fresh = _index_nodes(fresh_nodes)
+        fresh = _index_nodes([node for node in fresh_nodes if _is_form_control(node)])
         if mappings is None:
             mappings = self.mappings
         if record is None:
@@ -720,8 +810,6 @@ class PendingFieldQueue:
             added += 1
         return added
 
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     def bbox_for_id(self, field_id: str | None) -> BBox | None:
         """Live bbox for an action's ``field_id`` (stable id) from the queue.
 
@@ -751,27 +839,25 @@ def build_field_queue(field_map: Any, record: Any, mappings: list[dict[str, str]
     (they may still be visible) but produce no actions.
     """
     pairs = dict(getattr(record, "pairs", {}) or {})
-    target_value: dict[str, str] = {}
-    for m in (mappings if mappings is not None else getattr(field_map, "mappings", None) or []):
-        source = m.get("source", "")
-        target = m.get("target", "")
-        if target and source in pairs:
-            target_value[target] = pairs[source]
+    target_value = _mapped_target_values(field_map, pairs, mappings)
 
     targets: list[FieldTarget] = []
-    for ordinal, (match_key, node) in enumerate(_index_nodes(getattr(field_map, "right_fields", None) or [])):
+    form_nodes = [
+        node for node in (getattr(field_map, "right_fields", None) or [])
+        if _is_form_control(node)
+    ]
+    for ordinal, (match_key, node) in enumerate(_index_nodes(form_nodes)):
         key = _clean_label(getattr(node, "name", "") or "") or (getattr(node, "automation_id", "") or "").strip()
-        targets.append(FieldTarget(node=node, value=target_value.get(key), ordinal=ordinal, _match_key=match_key))
+        value = target_value.get(key)
+        if value is None:
+            value = next((target_value[tkey] for tkey in _target_keys(node) if tkey in target_value), None)
+        targets.append(FieldTarget(node=node, value=value, ordinal=ordinal, _match_key=match_key))
     # Resolve the record's date-like value so unlabelled Day/Month/Year combos
     # can be detected and filled even without a label or mapping.
     date_value = _find_date_value(pairs)
-<<<<<<< HEAD
     merged = _merge_date_groups(targets, date_value)
     queue_mappings = list(mappings) if mappings is not None else list(getattr(field_map, "mappings", None) or [])
     return PendingFieldQueue(merged, record=record, mappings=queue_mappings)
-=======
-    return PendingFieldQueue(_merge_date_groups(targets, date_value))
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
 
 class ScrollCapabilityCache:
@@ -1093,11 +1179,8 @@ __all__ = [
     "FieldTarget",
     "DateGroupTarget",
     "PendingFieldQueue",
-<<<<<<< HEAD
     "FieldStatus",
     "classify_fill_status",
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
     "ScrollCapabilityCache",
     "TargetNavigator",
     "ScrollProgress",
@@ -1106,6 +1189,7 @@ __all__ = [
     "build_field_queue",
     "build_field_actions",
     "make_scroll_fn",
+    "source_coverage_from_queue",
     "split_date_parts",
     "_date_parts",
     "_find_date_value",

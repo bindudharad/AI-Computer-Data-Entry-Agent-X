@@ -53,12 +53,15 @@ def fake_win32(monkeypatch):
     return fake
 
 
-def test_start_registers_four_hotkeys(fake_win32) -> None:
+def test_start_registers_requested_safe_stop_hotkey(fake_win32) -> None:
+    import win32con
+
     mgr = HotkeyManager()
     mgr.register("stop", lambda: None)
     mgr.start()
     time.sleep(0.2)
     assert len(fake_win32.registered) == 4
+    assert fake_win32.registered[1][2:] == (win32con.MOD_CONTROL, 0x53)
     mgr.stop()
 
 
@@ -72,7 +75,7 @@ def test_hotkey_dispatch_invokes_callback(fake_win32) -> None:
     try:
         time.sleep(0.2)
         fake_win32.feed(1)  # ESC -> pause
-        fake_win32.feed(2)  # Ctrl+Shift+S -> safe stop
+        fake_win32.feed(2)  # Ctrl+S -> safe stop
         fake_win32.feed(3)  # Ctrl+Shift+R -> resume
         time.sleep(0.4)
     finally:

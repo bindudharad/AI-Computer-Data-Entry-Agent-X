@@ -19,6 +19,9 @@ Examples:
     # Run with the (faster) field-driven engine
     python run_mpf_test.py --records 3 --field-driven
 
+    # Field-driven + per-record Excel export (one row per submitted record)
+    python run_mpf_test.py --records 3 --field-driven --excel debug/mpf/records.xlsx
+
     # Attach by window title instead of clicking the window
     python run_mpf_test.py --records 3 --field-driven --attach-by-title
 
@@ -67,6 +70,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attach", action="store_true", help="attach via the full strategy chain (HWND -> UIA root -> child windows -> focused element) then continue into field discovery")
     parser.add_argument("--attach-by-title", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--auto", action="store_true", help="universal attach-first: DISCOVER -> CLASSIFY -> ATTACH an existing target; never relaunches an existing browser/application, then runs the (field-driven) loop straight away")
+    parser.add_argument("--excel", default="", help="path to the per-record Excel export workbook (default: WORKFLOW_EXCEL_PATH / off)")
+    parser.add_argument("--mapping-threshold", type=float, default=None, help="source mapping coverage threshold (0..1, default 0.95) below which MAPPING_RECOVERY runs")
     parser.add_argument("--log-level", default="INFO", help="log level (DEBUG/INFO/WARNING/ERROR)")
     return parser
 
@@ -85,6 +90,10 @@ def main() -> int:
     setup_logging(args.log_level, Path("logs"))
     if args.field_driven:
         os.environ["WORKFLOW_FIELD_DRIVEN"] = "1"
+    if args.excel:
+        os.environ["WORKFLOW_EXCEL_PATH"] = args.excel
+    if args.mapping_threshold is not None:
+        os.environ["WORKFLOW_MAPPING_COVERAGE_THRESHOLD"] = str(args.mapping_threshold)
     config = load_config()
 
     if args.diagnose:
@@ -115,6 +124,9 @@ def main() -> int:
     print(f"Max records: {args.records if args.records > 0 else 'unlimited'}")
     print(f"Dashboard: {'disabled' if args.no_dashboard else 'enabled'}")
     print(f"Engine: {'field-driven' if args.field_driven else 'viewport-round'}")
+    if args.excel:
+        print(f"Excel export: {args.excel}")
+    print(f"Mapping coverage threshold: {0.95 if args.mapping_threshold is None else args.mapping_threshold:.0%}")
     if args.auto:
         print(f"Attach: universal attach-first (existing target, never relaunches)")
     else:

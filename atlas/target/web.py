@@ -410,12 +410,33 @@ class WebTarget(TargetAdapter):
         self._info = None
 
     def is_alive(self) -> bool:
+        """True when the attached page is still usable.
+
+        Handles the async-vs-sync Playwright trap: ``is_closed()`` on the sync
+        API returns a plain ``bool``, but when the underlying driver state is
+        inconsistent (sync object created on another thread / driver being torn
+        down) it can return a coroutine object or raise ``TypeError`` from
+        ``asyncio.run_coroutine_threadsafe``. In every ambiguous case we report
+        ALIVE - a page we cannot inspect must never be declared dead, because a
+        false "dead" detection makes the browser watchdog tear down and restart
+        a perfectly good connection (the restart loop from the production logs).
+        A page that is truly gone fails the next real operation instead.
+        """
         if self._page is None:
             return False
         try:
-            return not self._page.is_closed()
+            closed = self._page.is_closed()
+        except (TypeError, RuntimeError):
+            # Coroutine/threading mismatch: the page is still attached - do not
+            # declare it dead based on a broken aliveness probe.
+            return True
         except Exception:
             return False
+        if hasattr(closed, "__await__"):
+            # The probe returned a coroutine instead of a bool (async driver
+            # leak). Never treat an in-flight connection as closed.
+            return True
+        return not bool(closed)
 
     def observe(self) -> SceneAnalysis | None:
         if self._page is None:

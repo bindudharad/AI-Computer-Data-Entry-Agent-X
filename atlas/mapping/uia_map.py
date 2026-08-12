@@ -145,7 +145,6 @@ class UiaFieldMapBuilder:
         self._backend = backend or UiaBackend.instance()
         self._declared_fields = declared_fields or {}
 
-<<<<<<< HEAD
     def build(self, hwnd: int, start_control: UiaNode | None = None, light: bool = False) -> UiaFieldMap:
         """Build a :class:`UiaFieldMap` from a window handle + start control.
 
@@ -156,9 +155,6 @@ class UiaFieldMapBuilder:
         so per-scroll refreshes never re-find containers; ``left_rect`` /
         ``left_labels`` stay intact for source reading.
         """
-=======
-    def build(self, hwnd: int, start_control: UiaNode | None = None) -> UiaFieldMap:
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         origin = self._backend.client_origin(hwnd)
         size = self._backend.client_size(hwnd)
         mid_x = origin[0] + size[0] // 2
@@ -179,11 +175,7 @@ class UiaFieldMapBuilder:
         right_fields = [n for n in editable if n.rect is not None and n.rect.center[0] >= mid_x]
         if not right_fields:
             right_fields = editable
-<<<<<<< HEAD
         right_fields = [self._attach_declared(n, hwnd) for n in right_fields]
-=======
-        right_fields = [self._attach_declared(n) for n in right_fields]
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
         # NOTE: no scrolling happens here, on purpose. Scrolling below the fold
         # during field-map building is what caused the premature scroll seen
@@ -222,7 +214,6 @@ class UiaFieldMapBuilder:
 
         # Discover the real scrollable panels (left source list, right entry
         # form) from the UIA hierarchy - the outer window never scrolls.
-<<<<<<< HEAD
         # The light refresh path skips this independent traversal: the scroll
         # session is discovered once by the scroller provider and cached, so
         # per-scroll position refreshes never re-walk the tree for containers.
@@ -233,14 +224,6 @@ class UiaFieldMapBuilder:
                 scroll_containers = self._backend.scroll_containers(hwnd, client)
             except Exception as exc:
                 logger.debug("scroll container discovery failed: {}", exc)
-=======
-        scroll_containers: list[ScrollContainer] = []
-        try:
-            client = (origin[0], origin[1], origin[0] + size[0], origin[1] + size[1])
-            scroll_containers = self._backend.scroll_containers(hwnd, client)
-        except Exception as exc:
-            logger.debug("scroll container discovery failed: {}", exc)
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
 
         left_rect = _union_rect([n.rect for n in left_labels if n.rect is not None])
         right_rect = _union_rect([n.rect for n in right_fields if n.rect is not None])
@@ -268,7 +251,6 @@ class UiaFieldMapBuilder:
         )
         return field_map
 
-<<<<<<< HEAD
     def _attach_declared(self, node: UiaNode, hwnd: int | None = None) -> UiaNode:
         """Attach declared widget options/type by normalized label, if any.
 
@@ -278,17 +260,12 @@ class UiaFieldMapBuilder:
         filled by an earlier direct selection - reusing it avoids re-opening
         the dropdown to re-discover the list.
         """
-=======
-    def _attach_declared(self, node: UiaNode) -> UiaNode:
-        """Attach declared widget options/type by normalized label, if any."""
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         if not self._declared_fields:
             return node
         declared = self._declared_fields.get(normalize_label(node.name))
         if not declared:
             return node
         options = list(declared.get("options") or [])
-<<<<<<< HEAD
         if not options and hwnd is not None and node.rect is not None:
             try:
                 cached = self._backend.cached_options(hwnd, node.rect)
@@ -296,8 +273,6 @@ class UiaFieldMapBuilder:
                 cached = None
             if cached:
                 options = cached
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         if options:
             node.options = options
         element_type = _parse_element_type(declared.get("type", ""))

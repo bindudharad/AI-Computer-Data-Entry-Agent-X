@@ -435,6 +435,7 @@ class Assistant:
                     aliases=self._mapper.aliases.as_dict(),
                 ),
                 "scroll_container_provider": self._scroll_session_provider(),
+                "field_map_refresh": self._refresh_field_map(handle, out),
             }
 
         self._loop = self._build_loop(records, **kwargs)
@@ -574,15 +575,11 @@ class Assistant:
                     backend=backend,
                     declared_fields=self._declared_fields(),
                 )
-<<<<<<< HEAD
                 # Light refresh: re-read the editable fields / buttons / text
                 # labels from ONE flat walk but skip the (expensive, redundant)
                 # scroll-container traversal - the loop's scroll session is
                 # discovered once by the scroller provider and cached.
                 refreshed = builder.build(handle, None, light=True)
-=======
-                refreshed = builder.build(handle, None)
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
                 if refreshed.has_form:
                     return refreshed
             except Exception as exc:
@@ -668,6 +665,9 @@ class Assistant:
             field_timeout=self._config.workflow.field_timeout,
             field_scroll_attempts=self._config.workflow.field_scroll_attempts,
             field_retries=self._config.workflow.field_retries,
+            mapping_coverage_threshold=self._config.workflow.mapping_coverage_threshold,
+            mapping_recovery_max_attempts=self._config.workflow.mapping_recovery_max_attempts,
+            excel_path=self._config.workflow.excel_path,
             **kwargs,  # type: ignore[arg-type]
         )
         if self._executor is not None:
@@ -1009,7 +1009,6 @@ class Assistant:
                 logger.debug("uia set value failed: {}", exc)
                 return False
 
-<<<<<<< HEAD
         def _select_option(bbox: BBox, value: str, options: list[str] | None, field_id: str | None) -> bool:
             info = self._target.info if self._target is not None else None
             if info is None or info.handle is None:
@@ -1022,8 +1021,7 @@ class Assistant:
                 logger.debug("uia select option failed: {}", exc)
                 return False
 
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
+
         return ControlEngine(
             mouse=self._mouse,
             keyboard=self._keyboard,
@@ -1031,10 +1029,7 @@ class Assistant:
             clipboard_use_long=self._config.typing.use_clipboard_for_long,
             clipboard_min_length=self._config.typing.clipboard_min_length,
             value_setter=_set_value,
-<<<<<<< HEAD
             option_setter=_select_option,
-=======
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         )
 
     def _desktop_verifier(self) -> CompositeVerifier:

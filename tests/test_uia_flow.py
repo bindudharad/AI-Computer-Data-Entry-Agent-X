@@ -22,7 +22,7 @@ from atlas.observe.uia import UiaNode
 from atlas.reason.planner import ActionPlanner
 from atlas.reason.recovery import RecoveryPlanner
 from atlas.target.base import TargetAdapter, TargetInfo
-from atlas.understanding.source import SourceReader
+from atlas.understanding.source import SourceReader, SourceRecord
 from atlas.vision.models import BBox, ElementType, OcrText, SceneDescription
 from atlas.vision.scene import SceneAnalysis
 from atlas.workflow.loop import AgentLoop
@@ -498,6 +498,116 @@ def test_anchored_loop_three_records(tmp_path: Path) -> None:
     assert len(uploads) == 3
 
 
+def _field_map_for(rec: dict) -> UiaFieldMap:
+    """A synthetic MPF field map whose LEFT source panel mirrors ``rec``.
+
+    Each source field is a label text node with its value as a sibling text
+    node on the same row, exactly like the real MPF left panel, so
+    ``pair_source_pairs`` recovers label -> value from UIA alone (no OCR).
+    Labels stay narrow (<= 120px) so they are not mistaken for section headers.
+    """
+    left = [
+        UiaNode(name="Application Number", control_type="Text", rect=BBox(20, 20, 80, 18), handle=1101),
+        UiaNode(name=rec["key"], control_type="Text", rect=BBox(120, 20, 130, 18), handle=1102),
+        UiaNode(name="Full Name", control_type="Text", rect=BBox(20, 50, 80, 18), handle=1103),
+        UiaNode(name=rec["name"], control_type="Text", rect=BBox(120, 50, 130, 18), handle=1104),
+        UiaNode(name="Gender", control_type="Text", rect=BBox(20, 80, 80, 18), handle=1105),
+        UiaNode(name=rec["gender"], control_type="Text", rect=BBox(120, 80, 130, 18), handle=1106),
+        UiaNode(name="Date Of Birth", control_type="Text", rect=BBox(20, 110, 80, 18), handle=1107),
+        UiaNode(name=rec["dob"], control_type="Text", rect=BBox(120, 110, 130, 18), handle=1108),
+    ]
+    right = [
+        UiaNode(name="Full Name", control_type="Edit", handle=2001, rect=BBox(500, 40, 200, 24)),
+        UiaNode(name="Gender", control_type="ComboBox", handle=2002, rect=BBox(500, 80, 200, 24),
+                options=["Male", "Female"]),
+        UiaNode(name="Date Of Birth", control_type="Edit", handle=2003, rect=BBox(500, 120, 200, 24),
+                type_override=ElementType.DATE_PICKER),
+    ]
+    upload = UiaNode(name="Upload Details", control_type="Button", handle=3001, rect=BBox(500, 300, 140, 32))
+    return UiaFieldMap(
+        start_control=right[0],
+        left_labels=left,
+        right_fields=right,
+        upload_button=upload,
+        left_rect=BBox(10, 10, 300, 200),
+        right_rect=BBox(480, 30, 300, 320),
+        mappings=[
+            {"source": "Full Name", "target": "Full Name", "confidence": 0.98},
+            {"source": "Gender", "target": "Gender", "confidence": 0.98},
+            {"source": "Date Of Birth", "target": "Date Of Birth", "confidence": 0.98},
+        ],
+        client_origin=(0, 0),
+        client_size=(1024, 768),
+    )
+
+
+def test_field_driven_loop_multi_record_reset_detection(tmp_path: Path) -> None:
+    """The field-driven loop processes 2 records back-to-back on MPF.
+
+    After the upload click the simulated app advances its LEFT source panel to
+    the next record. The UIA-first submit verification and the next-record
+    await must detect that reset WITHOUT a VLM observe, and the second record
+    must start clean (no stale field map / queue / data leaking in).
+    """
+    get_event_bus().clear()
+    records = [
+        {"key": "MPF-100", "name": "KRISHNA", "gender": "Male", "dob": "21 March 1996"},
+        {"key": "MPF-200", "name": "RAVI KUMAR", "gender": "Female", "dob": "05 August 1990"},
+        # The form advances to a third record after the final upload; the loop
+        # must stop at max_records=2 without ever touching it.
+        {"key": "MPF-300", "name": "SITA DEVI", "gender": "Male", "dob": "14 December 1988"},
+    ]
+    target = FieldMapFakeTarget(records)
+    state = {"idx": 0}
+
+    def refresh() -> UiaFieldMap:
+        return _field_map_for(records[min(state["idx"], len(records) - 1)])
+
+    class SubmitAwareControls(RecordingControls):
+        def __init__(self) -> None:
+            super().__init__()
+            self.uploads = 0
+
+        def click_field(self, bbox, field_id=None):
+            if field_id and "uia-btn-3001" in str(field_id):
+                state["idx"] = min(state["idx"] + 1, len(records) - 1)
+                self.uploads += 1
+            return super().click_field(bbox, field_id=field_id)
+
+    controls = SubmitAwareControls()
+    plugin = MpfPlugin()
+    mapper = SemanticMapper()
+    for variant, canonical in plugin._config.get("aliases", {}).items():
+        mapper.aliases.learn(variant, canonical)
+
+    executor = ActionExecutor(
+        mouse=StubMouse(), keyboard=StubKeyboard(), controls=controls,
+        verifier=PassVerifier(), recovery=RecoveryPlanner(),
+        verify_after_action=True, max_retries=3, retry_delay=0.0,
+    )
+    loop = AgentLoop(
+        target=target, source_reader=SourceReader(), mapper=mapper,
+        planner=ActionPlanner(verify_after_action=True), executor=executor,
+        max_records=2, next_record_timeout=2.0, next_record_poll=0.05,
+        field_map=refresh(),
+        field_map_refresh=refresh,
+        field_driven=True,
+        debug_dir=tmp_path,
+    )
+    summary = loop.run()
+
+    assert summary.completed == 2, summary.to_dict()
+    assert summary.failed == 0
+    assert len(summary.records) == 2
+    assert [r.record.record_key for r in summary.records] == ["MPF-100", "MPF-200"]
+    # Each record was filled exactly once with ITS OWN data (no stale leak).
+    # In the field-driven path the date picker is written via a SELECT action.
+    assert controls.typed == ["KRISHNA", "RAVI KUMAR"]
+    assert controls.selected == ["Male", "21 March 1996", "Female", "05 August 1990"]
+    assert controls.uploads == 2
+    assert loop.state.value == "stopped"
+
+
 def test_anchored_loop_writes_debug_artifacts(tmp_path: Path) -> None:
     _run_anchored_records(tmp_path)
     for name in ("planner.json", "execution_plan.json", "execution.json", "verification.json"):
@@ -727,3 +837,224 @@ def test_assistant_captures_start_control_and_builds_map(tmp_path: Path, monkeyp
     assert field_map.has_form
     assert (out / "field_map.json").exists()
     assert (out / "uia_tree.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# MAPPING_RECOVERY + Excel export
+# ---------------------------------------------------------------------------
+
+
+def _source_record_for(rec: dict) -> SourceRecord:
+    return SourceRecord(
+        pairs={
+            "Application Number": rec["key"],
+            "Full Name": rec["name"],
+            "Gender": rec["gender"],
+            "Date Of Birth": rec["dob"],
+        },
+        ordered_labels=["Application Number", "Full Name", "Gender", "Date Of Birth"],
+    )
+
+
+def _full_field_map(rec: dict) -> UiaFieldMap:
+    """A complete field map: every source field binds to a right-form target."""
+    from dataclasses import replace
+
+    full = _field_map_for(rec)
+    if any(m["source"] == "Application Number" for m in full.mappings):
+        return full
+    return replace(full, mappings=list(full.mappings) + [
+        {"source": "Application Number", "target": "Application Number", "confidence": 0.98},
+    ])
+
+
+def _partial_field_map(rec: dict) -> UiaFieldMap:
+    """A field map whose LEFT->RIGHT mappings cover only half the source fields."""
+    from dataclasses import replace
+
+    full = _field_map_for(rec)
+    return replace(
+        full,
+        mappings=[m for m in full.mappings if m["source"] in {"Full Name", "Gender"}],
+    )
+
+
+def test_source_coverage_metric_is_source_side() -> None:
+    """Coverage is measured on the SOURCE side (the old agent's broken
+    ``mapped 21 source fields coverage=46%`` metric), not the form side."""
+    rec = {"key": "MPF-100", "name": "KRISHNA", "gender": "Male", "dob": "21 March 1996"}
+    record = _source_record_for(rec)
+    full = _full_field_map(rec)
+
+    cov, unmapped = AgentLoop._source_coverage(record, full)
+    assert cov == 1.0
+    assert unmapped == []
+
+    partial = _partial_field_map(rec)
+    cov, unmapped = AgentLoop._source_coverage(record, partial)
+    assert cov == 0.5
+    assert set(unmapped) == {"Application Number", "Date Of Birth"}
+
+    # A record with no valued pairs is trivially 100% (nothing to enter).
+    empty = _source_record_for(rec)
+    empty.pairs = {}
+    cov, unmapped = AgentLoop._source_coverage(empty, full)
+    assert cov == 1.0
+    assert unmapped == []
+
+
+def _build_recovery_loop(records: list[dict], refresh) -> AgentLoop:
+    get_event_bus().clear()
+    target = FieldMapFakeTarget(records)
+    controls = RecordingControls()
+    plugin = MpfPlugin()
+    mapper = SemanticMapper()
+    for variant, canonical in plugin._config.get("aliases", {}).items():
+        mapper.aliases.learn(variant, canonical)
+    executor = ActionExecutor(
+        mouse=StubMouse(), keyboard=StubKeyboard(), controls=controls,
+        verifier=PassVerifier(), recovery=RecoveryPlanner(),
+        verify_after_action=True, max_retries=3, retry_delay=0.0,
+    )
+    return AgentLoop(
+        target=target, source_reader=SourceReader(), mapper=mapper,
+        planner=ActionPlanner(verify_after_action=True), executor=executor,
+        max_records=1, next_record_timeout=2.0, next_record_poll=0.05,
+        field_map=refresh(),
+        field_map_refresh=refresh,
+        field_driven=True,
+    )
+
+
+def test_mapping_recovery_rebuilds_queue_when_coverage_is_low() -> None:
+    """Low source coverage enters MAPPING_RECOVERY and the field map refresh
+    brings the queue back to full coverage - never a silent half-fill."""
+    rec = {"key": "MPF-100", "name": "KRISHNA", "gender": "Male", "dob": "21 March 1996"}
+    calls = {"n": 0}
+
+    def refresh():
+        calls["n"] += 1
+        # First snapshot has half the mappings; any later snapshot is complete.
+        if calls["n"] == 1:
+            return _partial_field_map(rec)
+        return _full_field_map(rec)
+
+    loop = _build_recovery_loop([rec], refresh)
+    record = _source_record_for(rec)
+    assert AgentLoop._source_coverage(record, _partial_field_map(rec))[0] < loop._mapping_coverage_threshold
+
+    fresh, queue, attempts = loop._recover_field_driven_mapping(record, 1)
+    assert attempts >= 1
+    assert loop.state.value == "mapping_recovery"
+    cov, unmapped = loop._source_coverage(fresh, loop._field_map)
+    assert cov >= loop._mapping_coverage_threshold
+    assert unmapped == []
+    # The rebuilt queue binds every valued source field.
+    bound = {it.label for it in queue.items if it.source_backed}
+    assert {"Full Name", "Gender", "Date Of Birth"} <= bound
+    # A MAPPING_RECOVERY recovery event was published (state surfaced, not silent).
+    assert any(
+        ev.data.get("state") == "mapping_recovery"
+        for ev in get_event_bus().history(EventType.RECOVERY)
+    )
+
+
+def test_mapping_recovery_is_bounded_and_never_loops() -> None:
+    """Even a refresh that never improves coverage stops after the configured
+    attempt cap instead of spinning."""
+    rec = {"key": "MPF-100", "name": "KRISHNA", "gender": "Male", "dob": "21 March 1996"}
+    partial = _partial_field_map(rec)
+
+    loop = _build_recovery_loop([rec], lambda: partial)
+    loop._mapping_recovery_max_attempts = 2
+    record = _source_record_for(rec)
+
+    fresh, queue, attempts = loop._recover_field_driven_mapping(record, 1)
+    assert attempts <= loop._mapping_recovery_max_attempts
+    assert queue is not None
+    cov, _ = loop._source_coverage(fresh, loop._field_map)
+    assert cov < loop._mapping_coverage_threshold  # still low - but no hang
+
+
+def test_excel_export_appends_one_row_per_record(tmp_path: Path) -> None:
+    """The configured workbook gets a header + one row per submitted record with
+    the spec's lead columns and every source field."""
+    get_event_bus().clear()
+    records = [
+        {"key": "MPF-100", "name": "KRISHNA", "gender": "Male", "dob": "21 March 1996"},
+        {"key": "MPF-200", "name": "RAVI KUMAR", "gender": "Female", "dob": "05 August 1990"},
+        # A third record so the final upload advances to a DIFFERENT source key,
+        # letting the UIA-first submit verification detect the reset (no VLM).
+        {"key": "MPF-300", "name": "SITA DEVI", "gender": "Male", "dob": "14 December 1988"},
+    ]
+    state = {"idx": 0}
+
+    def refresh():
+        current = records[min(state["idx"], len(records) - 1)]
+        return _full_field_map(current)
+
+    class SubmitAwareControls(RecordingControls):
+        def __init__(self) -> None:
+            super().__init__()
+            self.uploads = 0
+
+        def click_field(self, bbox, field_id=None):
+            if field_id and "uia-btn-3001" in str(field_id):
+                state["idx"] = min(state["idx"] + 1, len(records) - 1)
+                self.uploads += 1
+            return super().click_field(bbox, field_id=field_id)
+
+    controls = SubmitAwareControls()
+    plugin = MpfPlugin()
+    mapper = SemanticMapper()
+    for variant, canonical in plugin._config.get("aliases", {}).items():
+        mapper.aliases.learn(variant, canonical)
+    executor = ActionExecutor(
+        mouse=StubMouse(), keyboard=StubKeyboard(), controls=controls,
+        verifier=PassVerifier(), recovery=RecoveryPlanner(),
+        verify_after_action=True, max_retries=3, retry_delay=0.0,
+    )
+    excel = tmp_path / "records.xlsx"
+    loop = AgentLoop(
+        target=FieldMapFakeTarget(records), source_reader=SourceReader(), mapper=mapper,
+        planner=ActionPlanner(verify_after_action=True), executor=executor,
+        max_records=2, next_record_timeout=2.0, next_record_poll=0.05,
+        field_map=refresh(),
+        field_map_refresh=refresh,
+        field_driven=True,
+        excel_path=str(excel),
+        debug_dir=tmp_path,
+    )
+    summary = loop.run()
+
+    assert summary.completed == 2
+    # Every record exported clean coverage (no recovery needed in the full map).
+    assert all(r.source_coverage == 1.0 for r in summary.records)
+    assert all(r.mapping_recovery_attempts == 0 for r in summary.records)
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(excel)
+    ws = wb["records"]
+    header = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+    assert header[:4] == ["Record Number", "App No", "MBI Code", "Full Name"]
+    assert "Gender" in header and "Date Of Birth" in header
+    for name in ("Status", "Timestamp", "Verification Status", "Error/Retry Count", "Duration (s)"):
+        assert name in header, f"missing meta column {name}"
+
+    def _row(n: int) -> dict:
+        return {header[c]: ws.cell(row=n, column=c + 1).value for c in range(len(header))}
+
+    first = _row(2)
+    assert first["Record Number"] == "MPF-100"
+    assert first["App No"] == "MPF-100"
+    assert first["Full Name"] == "KRISHNA"
+    assert first["Gender"] == "Male"
+    assert first["Date Of Birth"] == "21 March 1996"
+    assert first["Status"] == "OK"
+    assert first["Verification Status"] == "verified"
+    second = _row(3)
+    assert second["Record Number"] == "MPF-200"
+    assert second["Full Name"] == "RAVI KUMAR"
+    # Exactly one row per record (header + 2 data rows).
+    assert ws.max_row == 3

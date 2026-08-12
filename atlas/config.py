@@ -197,6 +197,23 @@ class WorkflowConfig:
     #: Skip a write entirely when the field already holds the target value
     #: (no-op ALREADY_CORRECT detection). Costs one pre-write read per field.
     noop_detect: bool = field(default_factory=_fb("WORKFLOW_NOOP_DETECT", True))
+    #: Minimum share of right-form fields that must be backed by a source value
+    #: before the record is filled. Below this the loop enters MAPPING_RECOVERY
+    #: and re-reads the source instead of blindly filling (bug #5: never
+    #: interpret a missing OCR value as "no value to enter").
+    mapping_coverage_threshold: float = field(
+        default_factory=_ff("WORKFLOW_MAPPING_COVERAGE_THRESHOLD", 0.95)
+    )
+    #: Per-record attempts (including success) to get source coverage back above
+    #: the threshold before the record is abandoned rather than half-filled.
+    mapping_recovery_max_attempts: int = field(
+        default_factory=_fi("WORKFLOW_MAPPING_RECOVERY_MAX_ATTEMPTS", 2)
+    )
+    #: Optional path to a persistent Excel workbook for per-record results.
+    #: When set, every submitted record is appended as a row. Columns are
+    #: Record Number, App No, MBI Code, Full Name + every source field, plus
+    #: status, timestamp, verification status and error/retry count.
+    excel_path: str = field(default_factory=_f("WORKFLOW_EXCEL_PATH", ""))
 
 
 @dataclass(frozen=True)

@@ -574,13 +574,9 @@ class ActionExecutor:
         elif action.type == ActionType.CLEAR:
             self._controls.clear(bbox, action.field_id)
         elif action.type == ActionType.SELECT and value is not None:
-<<<<<<< HEAD
             outcome = self._controls.select_option(bbox, value, action.options, action.field_id)
             if not outcome.ok:
                 return ActionResult(action=action, success=False, message=outcome.evidence)
-=======
-            self._controls.select_option(bbox, value, action.options, action.field_id)
->>>>>>> 506caa78300fd5640f3fd0dcb51ac6f142dcd8ca
         elif action.type == ActionType.TOGGLE and value is not None:
             self._controls.toggle(bbox, value, action.field_id)
         elif action.type == ActionType.CHOOSE_DATE and value is not None:
